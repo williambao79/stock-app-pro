@@ -9,6 +9,7 @@ from copy import copy
 
 import yfinance as yf
 import pandas as pd
+import streamlit as st
 from datetime import datetime, timedelta
 try:
     from openpyxl import load_workbook
