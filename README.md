@@ -1,21 +1,14 @@
-# Stock App Pro
+# Stock App Pro V3 - Mobile UI
 
-Cloud-ready Streamlit version for iPhone.
+Streamlit Cloud version optimized for iPhone.
 
-## Deploy
+## Main features
 
-1. Upload `app.py`, `requirements.txt`, and the `.streamlit` folder to a GitHub repository.
-2. Deploy the repo on Streamlit Community Cloud.
-3. Open the Streamlit URL on iPhone Safari and choose Share > Add to Home Screen.
+- Clean mobile interface
+- Quick Analyze for one or more tickers
+- Watchlist analysis
+- Chart Confirmation manual scoring
+- Mobile-friendly cards with entry, stop loss, target, risk/reward
+- Excel download
 
-## Run locally
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-
-## Quick Analyze
-
-Bản này có thêm ô **Quick Analyze** để nhập nhanh một hoặc nhiều ticker mới như `HOOD` hoặc `NVDA, TSLA` rồi bấm **RUN QUICK ANALYSIS**. Không cần sửa watchlist chính.
+Deploy on Streamlit Cloud with main file: `app.py`.

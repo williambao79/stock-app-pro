@@ -993,9 +993,8 @@ def save_to_excel(df):
 
 
 # ============================================================
-# Cloud/iPhone Web App UI
+# Cloud/iPhone Web App UI - V3 Clean Mobile Design
 # Deploy this file as app.py on Streamlit Community Cloud.
-# Then add the Streamlit URL to iPhone Home Screen.
 # ============================================================
 
 import io
@@ -1004,18 +1003,183 @@ import streamlit as st
 st.set_page_config(
     page_title="Stock App Pro",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-st.title("📈 Stock App Pro")
-st.caption("Mở trên iPhone như app: trend, entry, risk/reward, market filter, earnings, news, SEC filings.")
+st.markdown(
+    """
+    <style>
+    :root {
+        --card-bg: #ffffff;
+        --soft-bg: #f6f8fb;
+        --text-main: #0f172a;
+        --text-muted: #64748b;
+        --border: #e5e7eb;
+        --green: #16a34a;
+        --yellow: #ca8a04;
+        --red: #dc2626;
+        --blue: #2563eb;
+        --purple: #7c3aed;
+    }
+    .main .block-container {
+        padding-top: 1.1rem;
+        padding-bottom: 3rem;
+        max-width: 1120px;
+    }
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 1rem;
+    }
+    .hero {
+        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #7c3aed 100%);
+        color: white;
+        border-radius: 24px;
+        padding: 22px 20px;
+        box-shadow: 0 12px 35px rgba(15, 23, 42, 0.22);
+        margin-bottom: 16px;
+    }
+    .hero h1 {
+        font-size: 30px;
+        margin: 0 0 6px 0;
+        line-height: 1.1;
+    }
+    .hero p {
+        margin: 0;
+        color: rgba(255,255,255,0.86);
+        font-size: 15px;
+    }
+    .mini-note {
+        background: #eff6ff;
+        color: #1e3a8a;
+        border: 1px solid #bfdbfe;
+        border-radius: 16px;
+        padding: 11px 14px;
+        margin: 8px 0 14px 0;
+        font-size: 14px;
+    }
+    .stock-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        padding: 16px;
+        margin-bottom: 14px;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .stock-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 10px;
+        margin-bottom: 12px;
+    }
+    .ticker-title {
+        font-size: 25px;
+        font-weight: 800;
+        color: var(--text-main);
+        margin: 0;
+        letter-spacing: -0.02em;
+    }
+    .price-line {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-top: 2px;
+    }
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+        text-align: center;
+    }
+    .badge-good { background: #dcfce7; color: #166534; }
+    .badge-watch { background: #fef3c7; color: #92400e; }
+    .badge-bad { background: #fee2e2; color: #991b1b; }
+    .badge-info { background: #dbeafe; color: #1e40af; }
+    .badge-neutral { background: #f1f5f9; color: #334155; }
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin: 10px 0 12px 0;
+    }
+    .metric-box {
+        background: var(--soft-bg);
+        border-radius: 16px;
+        padding: 12px;
+        border: 1px solid #eef2f7;
+    }
+    .metric-label {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .03em;
+        margin-bottom: 4px;
+    }
+    .metric-value {
+        color: var(--text-main);
+        font-size: 18px;
+        font-weight: 800;
+        line-height: 1.15;
+        word-break: break-word;
+    }
+    .action-box {
+        border-radius: 16px;
+        padding: 13px 14px;
+        background: #f8fafc;
+        border-left: 5px solid #2563eb;
+        color: #0f172a;
+        margin-top: 8px;
+        font-size: 14px;
+    }
+    .small-muted { color: var(--text-muted); font-size: 13px; }
+    .section-title {
+        font-size: 21px;
+        font-weight: 800;
+        margin: 16px 0 6px 0;
+        color: var(--text-main);
+    }
+    .pill-row { display:flex; flex-wrap:wrap; gap:8px; margin: 8px 0 12px 0; }
+    .pill {
+        display:inline-block;
+        padding:7px 11px;
+        border-radius:999px;
+        background:#f1f5f9;
+        color:#334155;
+        font-size:13px;
+        font-weight:700;
+    }
+    div.stButton > button {
+        border-radius: 16px;
+        min-height: 48px;
+        font-weight: 800;
+    }
+    div[data-testid="stTextInput"] input, textarea {
+        border-radius: 14px !important;
+    }
+    @media (max-width: 640px) {
+        .main .block-container { padding-left: 0.9rem; padding-right: 0.9rem; }
+        .hero { border-radius: 20px; padding: 18px 16px; }
+        .hero h1 { font-size: 27px; }
+        .metric-grid { grid-template-columns: 1fr; }
+        .ticker-title { font-size: 23px; }
+        .stock-head { flex-direction: column; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ---------- Helpers for web version ----------
 
 def parse_tickers(text):
     tickers = []
-    for raw in text.replace(",", "\n").splitlines():
-        t = raw.strip().upper()
+    for raw in str(text).replace(",", "\n").replace(";", "\n").splitlines():
+        t = raw.strip().upper().replace("$", "")
         if t:
             tickers.append(t)
     return list(dict.fromkeys(tickers))
@@ -1055,38 +1219,293 @@ def load_default_text():
     return "\n".join(load_watchlist())
 
 
-# ---------- Sidebar ----------
+def badge_class(decision):
+    d = str(decision).upper()
+    if "WATCH TO ENTER" in d or "BUY" in d:
+        return "badge-good"
+    if "BREAKOUT" in d or "REVERSAL" in d or "PULLBACK" in d or "WAIT" in d:
+        return "badge-watch"
+    if "NO TRADE" in d or "AVOID" in d or "WEAK" in d or "RISK" in d:
+        return "badge-bad"
+    return "badge-neutral"
 
-with st.sidebar:
-    st.header("⚙️ Settings")
-    st.write("Nhập ticker, mỗi dòng một mã hoặc cách nhau bằng dấu phẩy.")
 
-    if "ticker_text" not in st.session_state:
-        st.session_state.ticker_text = load_default_text()
+def market_badge_class(market):
+    m = str(market).upper()
+    if "BULL" in m:
+        return "badge-good"
+    if "BEAR" in m:
+        return "badge-bad"
+    return "badge-info"
 
+
+def safe_money(value):
+    try:
+        if value == "" or pd.isna(value):
+            return "—"
+        return f"${float(value):.2f}"
+    except Exception:
+        return str(value) if value not in [None, ""] else "—"
+
+
+def safe_value(value, suffix=""):
+    try:
+        if value == "" or pd.isna(value):
+            return "—"
+    except Exception:
+        pass
+    return f"{value}{suffix}" if value not in [None, ""] else "—"
+
+
+def render_stock_card(row):
+    ticker = row.get("Ticker", "")
+    decision = row.get("Final Decision", "")
+    price = safe_money(row.get("Price", ""))
+    score = safe_value(row.get("Score", ""))
+    action = row.get("Action", "")
+    trend = row.get("Trend", "")
+    setup = row.get("Setup", "")
+    rsi = safe_value(row.get("RSI", ""))
+    rr = safe_value(row.get("Risk/Reward", ""))
+    entry = row.get("Aggressive Entry", "")
+    safe_entry = row.get("Safe Entry", "")
+    stop = safe_money(row.get("Stop Loss", ""))
+    target1 = safe_money(row.get("Target 1", ""))
+    target2 = safe_money(row.get("Target 2", ""))
+    support = safe_money(row.get("Support", ""))
+    resistance = safe_money(row.get("Resistance", ""))
+
+    st.markdown(
+        f"""
+        <div class="stock-card">
+            <div class="stock-head">
+                <div>
+                    <div class="ticker-title">{ticker}</div>
+                    <div class="price-line">Price {price} · Score {score}</div>
+                </div>
+                <span class="badge {badge_class(decision)}">{decision}</span>
+            </div>
+            <div class="metric-grid">
+                <div class="metric-box"><div class="metric-label">Entry đẹp</div><div class="metric-value">{entry or '—'}</div></div>
+                <div class="metric-box"><div class="metric-label">Stop loss</div><div class="metric-value">{stop}</div></div>
+                <div class="metric-box"><div class="metric-label">Target</div><div class="metric-value">{target1} / {target2}</div></div>
+                <div class="metric-box"><div class="metric-label">Risk / Reward</div><div class="metric-value">{rr}</div></div>
+            </div>
+            <div class="pill-row">
+                <span class="pill">Trend: {trend}</span>
+                <span class="pill">Setup: {setup}</span>
+                <span class="pill">RSI: {rsi}</span>
+                <span class="pill">Support: {support}</span>
+                <span class="pill">Resistance: {resistance}</span>
+            </div>
+            <div class="action-box"><b>Action:</b> {action or '—'}<br><span class="small-muted">Safe Entry: {safe_entry or '—'}</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    reasons = row.get("Reasons", "")
+    catalyst = row.get("Recent Catalyst", "")
+    sec = row.get("Recent SEC Filing", "")
+    earnings = row.get("Earnings Warning", "")
+    chart_note = row.get("Chart Note", "")
+
+    with st.expander(f"Chi tiết {ticker}: lý do, news, SEC"):
+        if reasons:
+            st.write("**Lý do phân tích:**")
+            st.write(reasons)
+        if earnings:
+            st.write(f"**Earnings:** {earnings}")
+        if chart_note:
+            st.write(f"**Chart note:** {chart_note}")
+        if catalyst:
+            st.write(f"**News:** {catalyst}")
+        if sec:
+            st.write(f"**SEC:** {sec}")
+
+
+def run_analysis_for_tickers(analysis_tickers):
+    progress = st.progress(0)
+    status = st.empty()
+    status.info("Đang kiểm tra thị trường chung...")
+    market_condition, market_notes = get_market_condition()
+    chart_confirmations = load_chart_confirmations()
+    results = []
+
+    for i, ticker in enumerate(analysis_tickers, start=1):
+        status.info(f"Đang phân tích {ticker}... ({i}/{len(analysis_tickers)})")
+        result = analyze_stock(
+            ticker,
+            market_condition=market_condition,
+            chart_confirmations=chart_confirmations
+        )
+        result["Market Notes"] = market_notes
+        results.append(result)
+        progress.progress(i / len(analysis_tickers))
+
+    df = pd.DataFrame(results)
+    if "Score" in df.columns:
+        df = df.sort_values(by="Score", ascending=False)
+    status.empty()
+    progress.empty()
+    return market_condition, market_notes, df
+
+
+# ---------- Header ----------
+
+st.markdown(
+    """
+    <div class="hero">
+        <h1>📈 Stock App Pro</h1>
+        <p>Phân tích swing trade trên iPhone: điểm vào, stop loss, target, risk/reward, market filter, news và SEC.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="mini-note">
+        Cách dùng nhanh: nhập mã ở <b>Quick Analyze</b> → bấm <b>RUN QUICK ANALYSIS</b>. Không cần sửa watchlist chính.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------- Session defaults ----------
+
+if "ticker_text" not in st.session_state:
+    st.session_state.ticker_text = load_default_text()
+if "quick_text" not in st.session_state:
+    st.session_state.quick_text = ""
+
+# ---------- Main tabs ----------
+
+tab_quick, tab_watchlist, tab_chart, tab_guide = st.tabs([
+    "⚡ Quick Analyze",
+    "📋 Watchlist",
+    "📌 Chart Signal",
+    "📱 iPhone Guide",
+])
+
+with tab_quick:
+    st.markdown('<div class="section-title">Phân tích nhanh mã mới</div>', unsafe_allow_html=True)
+    st.caption("Gõ 1 mã hoặc nhiều mã. Ví dụ: HOOD hoặc NVDA, TSLA, SOUN")
+    quick_text = st.text_input(
+        "Nhập ticker",
+        value=st.session_state.quick_text,
+        placeholder="HOOD, NVDA, TSLA",
+        key="quick_input",
+        label_visibility="collapsed"
+    )
+    st.session_state.quick_text = quick_text
+    quick_tickers = parse_tickers(quick_text)
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        quick_run = st.button("⚡ RUN QUICK ANALYSIS", type="primary", use_container_width=True)
+    with c2:
+        clear_quick = st.button("Clear", use_container_width=True)
+    if clear_quick:
+        st.session_state.quick_text = ""
+        st.rerun()
+
+    if quick_tickers:
+        st.markdown("<div class='pill-row'>" + "".join([f"<span class='pill'>{t}</span>" for t in quick_tickers]) + "</div>", unsafe_allow_html=True)
+
+    if quick_run:
+        if not quick_tickers:
+            st.error("Bạn chưa nhập ticker để phân tích nhanh.")
+        else:
+            try:
+                market_condition, market_notes, df = run_analysis_for_tickers(quick_tickers)
+                st.markdown(
+                    f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"Market notes: {market_notes}")
+
+                st.markdown('<div class="section-title">Kết quả</div>', unsafe_allow_html=True)
+                for _, row in df.iterrows():
+                    render_stock_card(row)
+
+                with st.expander("📊 Bảng chi tiết"):
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+
+                excel_bytes = dataframe_to_excel_bytes(df)
+                st.download_button(
+                    label="⬇️ Download Excel",
+                    data=excel_bytes,
+                    file_name="quick_analysis.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
+
+with tab_watchlist:
+    st.markdown('<div class="section-title">Watchlist chính</div>', unsafe_allow_html=True)
+    st.caption("Danh sách này dùng cho những mã bạn theo dõi thường xuyên.")
     ticker_text = st.text_area(
         "Watchlist",
         value=st.session_state.ticker_text,
-        height=240,
-        key="watchlist_area"
+        height=220,
+        placeholder="ENVX\nSOUN\nWULF\nPATH",
     )
+    tickers = parse_tickers(ticker_text)
 
-    col_save, col_reset = st.columns(2)
-    with col_save:
-        if st.button("💾 Save list"):
-            tickers_to_save = parse_tickers(ticker_text)
-            save_watchlist(tickers_to_save)
-            st.session_state.ticker_text = "\n".join(tickers_to_save)
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        if st.button("💾 Save list", use_container_width=True):
+            save_watchlist(tickers)
+            st.session_state.ticker_text = "\n".join(tickers)
             st.success("Đã lưu watchlist.")
-    with col_reset:
-        if st.button("↩️ Default"):
+    with c2:
+        if st.button("↩️ Default", use_container_width=True):
             st.session_state.ticker_text = "\n".join(DEFAULT_WATCHLIST)
             st.rerun()
+    with c3:
+        run_watchlist = st.button("🚀 RUN WATCHLIST ANALYSIS", type="primary", use_container_width=True)
 
-    st.divider()
-    st.subheader("Chart Confirmation")
-    st.caption("Tùy chọn: nhập xác nhận chart thủ công để app chấm điểm chính xác hơn.")
+    st.markdown(f"<div class='small-muted'>Đang có {len(tickers)} mã trong watchlist.</div>", unsafe_allow_html=True)
+    if tickers:
+        st.markdown("<div class='pill-row'>" + "".join([f"<span class='pill'>{t}</span>" for t in tickers]) + "</div>", unsafe_allow_html=True)
+    else:
+        st.warning("Bạn chưa nhập ticker nào trong watchlist.")
 
+    if run_watchlist:
+        if not tickers:
+            st.error("Bạn chưa nhập ticker trong watchlist.")
+        else:
+            try:
+                market_condition, market_notes, df = run_analysis_for_tickers(tickers)
+                st.markdown(
+                    f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"Market notes: {market_notes}")
+
+                st.markdown('<div class="section-title">Kết quả watchlist</div>', unsafe_allow_html=True)
+                for _, row in df.iterrows():
+                    render_stock_card(row)
+
+                with st.expander("📊 Bảng chi tiết"):
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+
+                excel_bytes = dataframe_to_excel_bytes(df)
+                st.download_button(
+                    label="⬇️ Download Excel",
+                    data=excel_bytes,
+                    file_name="watchlist_analysis.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"Lỗi: {e}")
+
+with tab_chart:
+    st.markdown('<div class="section-title">Chart Confirmation thủ công</div>', unsafe_allow_html=True)
+    st.caption("Dùng khi bạn tự xem chart và muốn app cộng/trừ điểm theo nhận định của bạn.")
     chart_ticker = st.text_input("Ticker chart", value="", placeholder="Ví dụ: PATH").upper().strip()
     chart_confirmation = st.selectbox(
         "Chart signal",
@@ -1104,7 +1523,7 @@ with st.sidebar:
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("✅ Save chart"):
+        if st.button("✅ Save chart signal", use_container_width=True):
             if not chart_ticker:
                 st.warning("Bạn chưa nhập ticker.")
             else:
@@ -1116,7 +1535,7 @@ with st.sidebar:
                 save_chart_confirmations(confirmations)
                 st.success(f"Đã lưu chart signal cho {chart_ticker}.")
     with c2:
-        if st.button("🧹 Clear chart"):
+        if st.button("🧹 Clear chart signal", use_container_width=True):
             if not chart_ticker:
                 st.warning("Bạn chưa nhập ticker cần xóa.")
             else:
@@ -1125,131 +1544,28 @@ with st.sidebar:
                 save_chart_confirmations(confirmations)
                 st.success(f"Đã xóa chart signal cho {chart_ticker}.")
 
-# ---------- Main ----------
+    confirmations = load_chart_confirmations()
+    if confirmations:
+        st.markdown('<div class="section-title">Chart signals đã lưu</div>', unsafe_allow_html=True)
+        st.dataframe(
+            pd.DataFrame([
+                {"Ticker": k, "Signal": v.get("confirmation", ""), "Note": v.get("note", "")}
+                for k, v in confirmations.items()
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
-tickers = parse_tickers(ticker_text)
-
-top1, top2, top3 = st.columns(3)
-top1.metric("Số ticker", len(tickers))
-top2.metric("File watchlist", WATCHLIST_FILE)
-top3.metric("Chart file", CHART_CONFIRMATION_FILE)
-
-with st.expander("📌 Cách cài như app trên iPhone", expanded=True):
+with tab_guide:
+    st.markdown('<div class="section-title">Cài như app trên iPhone</div>', unsafe_allow_html=True)
     st.markdown(
         """
-        **Sau khi deploy lên Streamlit Cloud:**
-        1. Mở link app trên Safari của iPhone.
-        2. Bấm nút **Share**.
-        3. Chọn **Add to Home Screen**.
-        4. Từ lần sau chỉ cần bấm icon **Stock App Pro** trên màn hình iPhone.
+        1. Mở link app bằng **Safari** trên iPhone.  
+        2. Bấm nút **Share**.  
+        3. Chọn **Add to Home Screen**.  
+        4. Đặt tên **Stock App Pro** rồi bấm **Add**.  
 
-        **Không cần chung Wi‑Fi, không cần ngrok, không cần mở CMD.**
+        Từ lần sau bạn chỉ cần bấm icon ngoài màn hình iPhone. Không cần CMD, không cần ngrok, không cần máy tính ở nhà bật.
         """
     )
-
-st.subheader("⚡ Quick Analyze")
-st.caption("Dùng khi bạn chỉ muốn xem nhanh 1 mã hoặc vài mã mới, không cần sửa watchlist chính.")
-quick_text = st.text_input(
-    "Nhập ticker cần phân tích nhanh",
-    value="",
-    placeholder="Ví dụ: HOOD hoặc NVDA, TSLA, SOUN",
-)
-quick_tickers = parse_tickers(quick_text)
-quick_run = st.button("⚡ RUN QUICK ANALYSIS", use_container_width=True)
-
-if not tickers:
-    st.warning("Bạn chưa nhập ticker nào trong watchlist.")
-else:
-    st.subheader("Watchlist")
-    st.write(", ".join(tickers))
-
-run = st.button("🚀 RUN WATCHLIST ANALYSIS", type="primary", use_container_width=True)
-
-analysis_tickers = quick_tickers if quick_run else tickers
-
-if run or quick_run:
-    if not analysis_tickers:
-        if quick_run:
-            st.error("Bạn chưa nhập ticker để phân tích nhanh.")
-        else:
-            st.error("Bạn chưa nhập ticker trong watchlist.")
-    else:
-        progress = st.progress(0)
-        status = st.empty()
-
-        try:
-            status.info("Đang kiểm tra thị trường chung...")
-            market_condition, market_notes = get_market_condition()
-
-            chart_confirmations = load_chart_confirmations()
-            results = []
-
-            for i, ticker in enumerate(analysis_tickers, start=1):
-                status.info(f"Đang phân tích {ticker}... ({i}/{len(analysis_tickers)})")
-                result = analyze_stock(
-                    ticker,
-                    market_condition=market_condition,
-                    chart_confirmations=chart_confirmations
-                )
-                result["Market Notes"] = market_notes
-                results.append(result)
-                progress.progress(i / len(analysis_tickers))
-
-            df = pd.DataFrame(results)
-
-            if "Score" in df.columns:
-                df = df.sort_values(by="Score", ascending=False)
-
-            st.success(f"Hoàn thành! Market Condition: {market_condition}")
-            st.caption(f"Market notes: {market_notes}")
-
-            # Mobile-friendly summary cards
-            st.subheader("📱 Tóm tắt nhanh")
-            for _, row in df.iterrows():
-                ticker = row.get("Ticker", "")
-                decision = row.get("Final Decision", "")
-                score = row.get("Score", "")
-                price = row.get("Price", "")
-                action = row.get("Action", "")
-                entry = row.get("Aggressive Entry", "")
-                stop = row.get("Stop Loss", "")
-                target1 = row.get("Target 1", "")
-                rr = row.get("Risk/Reward", "")
-
-                with st.container(border=True):
-                    a, b, c = st.columns([1, 1, 1])
-                    a.metric(str(ticker), f"${price}")
-                    b.metric("Score", score)
-                    c.metric("Decision", str(decision))
-
-                    st.write(f"**Action:** {action}")
-                    st.write(f"**Entry:** {entry} | **Stop:** {stop} | **Target 1:** {target1} | **R/R:** {rr}")
-
-                    reasons = row.get("Reasons", "")
-                    if reasons:
-                        with st.expander("Lý do phân tích"):
-                            st.write(reasons)
-
-                    catalyst = row.get("Recent Catalyst", "")
-                    sec = row.get("Recent SEC Filing", "")
-                    if catalyst or sec:
-                        with st.expander("News / SEC"):
-                            if catalyst:
-                                st.write(f"**News:** {catalyst}")
-                            if sec:
-                                st.write(f"**SEC:** {sec}")
-
-            st.subheader("📊 Bảng chi tiết")
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            excel_bytes = dataframe_to_excel_bytes(df)
-            st.download_button(
-                label="⬇️ Download Excel",
-                data=excel_bytes,
-                file_name="market_analysis_iphone.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-        except Exception as e:
-            st.error(f"Lỗi: {e}")
+    st.info("Gợi ý: dùng tab Quick Analyze khi bạn muốn kiểm tra nhanh một mã mới như HOOD, NVDA, TSLA.")
