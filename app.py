@@ -767,31 +767,62 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             reasons.append("SEC filing risk medium")
 
         # -------------------------------
+        # Entry Zones - Support Based Universal Logic
         # -------------------------------
-        # Entry Zones
-        # -------------------------------
-        # Entry Zone = vùng có thể quan sát gần giá hiện tại / EMA gần nhất
-        # Deep Safe Entry = vùng mua an toàn sâu hơn gần support
+        # Entry Zone = vùng gần support hợp lý để canh vào
+        # Deep Safe Entry = vùng thấp hơn support một chút
+        # Nếu support quá xa giá hiện tại, không kéo entry xuống quá sâu
 
-        if setup == "Near Support":
-            aggressive_entry_low = max(support, close * 0.985)
-            aggressive_entry_high = close * 1.03
+        support_distance_pct = ((close - support) / close) * 100 if close > 0 else 999
+
+        if support_distance_pct <= 3:
+            # Giá đang rất gần support
+            aggressive_entry_low = support * 1.00
+            aggressive_entry_high = support * 1.03
+            safe_entry_low = support * 0.97
+            safe_entry_high = support * 1.00
+
+        elif support_distance_pct <= 7:
+            # Support gần, vùng vào đẹp quanh support
+            aggressive_entry_low = support * 1.01
+            aggressive_entry_high = support * 1.05
+            safe_entry_low = support * 0.97
+            safe_entry_high = support * 1.01
+
+        elif support_distance_pct <= 12:
+            # Support hơi xa, vẫn dùng support nhưng nới vùng cao hơn
+            aggressive_entry_low = support * 1.03
+            aggressive_entry_high = support * 1.08
+            safe_entry_low = support * 0.98
+            safe_entry_high = support * 1.03
+
         else:
-            aggressive_entry_low = close * 0.98
-            aggressive_entry_high = close * 1.02
+            # Support quá xa giá hiện tại: không gọi là entry đẹp ngay
+            # Chỉ đưa vùng pullback hợp lý gần giá hơn để theo dõi
+            aggressive_entry_low = close * 0.94
+            aggressive_entry_high = close * 0.98
+            safe_entry_low = close * 0.88
+            safe_entry_high = close * 0.93
+            reasons.append("Support chính quá xa, chỉ nên chờ pullback gần hơn hoặc breakout xác nhận")
 
-        # Deep Safe Entry: thấp hơn Entry Zone, gần support hơn
-        safe_entry_low = support * 0.97
-        safe_entry_high = support * 1.01
+        # Nếu đang gần resistance thì hạ Entry Zone xuống để tránh mua đuổi
+        if setup == "Near Resistance":
+            aggressive_entry_low = min(aggressive_entry_low, close * 0.92)
+            aggressive_entry_high = min(aggressive_entry_high, close * 0.96)
+            safe_entry_low = min(safe_entry_low, close * 0.86)
+            safe_entry_high = min(safe_entry_high, close * 0.91)
+            reasons.append("Gần resistance, Entry Zone được hạ xuống để tránh mua đuổi")
 
-        # Nếu Deep Safe Entry bị dính quá gần Entry Zone thì kéo nó xuống thấp hơn một chút
+        # Bảo đảm Deep Safe Entry luôn thấp hơn Entry Zone
         if safe_entry_high >= aggressive_entry_low:
-            safe_entry_high = aggressive_entry_low * 0.99
+            safe_entry_high = aggressive_entry_low * 0.985
             safe_entry_low = safe_entry_high * 0.96
 
-        if aggressive_entry_low > close:
-            aggressive_entry_low = close * 0.98
-            aggressive_entry_high = close * 1.01
+        # Bảo vệ lỗi dữ liệu
+        aggressive_entry_low = max(aggressive_entry_low, 0)
+        aggressive_entry_high = max(aggressive_entry_high, aggressive_entry_low)
+        safe_entry_low = max(safe_entry_low, 0)
+        safe_entry_high = max(safe_entry_high, safe_entry_low)
 
         entry_mid = (aggressive_entry_low + aggressive_entry_high) / 2
         entry_distance_pct = ((close - entry_mid) / close) * 100
