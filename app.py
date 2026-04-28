@@ -766,18 +766,27 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             score -= 1
             reasons.append("SEC filing risk medium")
 
-        safe_entry_low = support * 1.01
-        safe_entry_high = support * 1.04
+        # -------------------------------
+# Entry Zones
+# -------------------------------
+# Entry Zone = vùng có thể quan sát gần giá hiện tại / EMA gần nhất
+# Deep Safe Entry = vùng mua an toàn sâu hơn gần support
 
-        if trend in ["Strong Uptrend", "Uptrend", "Neutral Up"]:
-            aggressive_entry_low = min(ema9, ema21) * 0.99
-            aggressive_entry_high = max(ema9, ema21) * 1.01
-        elif setup == "Near Support":
-            aggressive_entry_low = swing_support * 1.00
-            aggressive_entry_high = swing_support * 1.04
-        else:
-            aggressive_entry_low = safe_entry_low
-            aggressive_entry_high = safe_entry_high
+       if setup == "Near Support":
+          aggressive_entry_low = max(support, close * 0.985)
+          aggressive_entry_high = close * 1.03
+       else:
+          aggressive_entry_low = close * 0.98
+          aggressive_entry_high = close * 1.02
+
+# Deep Safe Entry: thấp hơn Entry Zone, gần support hơn
+          safe_entry_low = support * 0.97
+          safe_entry_high = support * 1.01
+
+# Nếu Deep Safe Entry bị dính quá gần Entry Zone thì kéo nó xuống thấp hơn một chút
+        if safe_entry_high >= aggressive_entry_low:
+            safe_entry_high = aggressive_entry_low * 0.99
+            safe_entry_low = safe_entry_high * 0.96
 
         if aggressive_entry_low > close:
             aggressive_entry_low = close * 0.98
