@@ -1147,17 +1147,32 @@ with st.expander("📌 Cách cài như app trên iPhone", expanded=True):
         """
     )
 
+st.subheader("⚡ Quick Analyze")
+st.caption("Dùng khi bạn chỉ muốn xem nhanh 1 mã hoặc vài mã mới, không cần sửa watchlist chính.")
+quick_text = st.text_input(
+    "Nhập ticker cần phân tích nhanh",
+    value="",
+    placeholder="Ví dụ: HOOD hoặc NVDA, TSLA, SOUN",
+)
+quick_tickers = parse_tickers(quick_text)
+quick_run = st.button("⚡ RUN QUICK ANALYSIS", use_container_width=True)
+
 if not tickers:
-    st.warning("Bạn chưa nhập ticker nào.")
+    st.warning("Bạn chưa nhập ticker nào trong watchlist.")
 else:
     st.subheader("Watchlist")
     st.write(", ".join(tickers))
 
-run = st.button("🚀 RUN ANALYSIS", type="primary", use_container_width=True)
+run = st.button("🚀 RUN WATCHLIST ANALYSIS", type="primary", use_container_width=True)
 
-if run:
-    if not tickers:
-        st.error("Bạn chưa nhập ticker.")
+analysis_tickers = quick_tickers if quick_run else tickers
+
+if run or quick_run:
+    if not analysis_tickers:
+        if quick_run:
+            st.error("Bạn chưa nhập ticker để phân tích nhanh.")
+        else:
+            st.error("Bạn chưa nhập ticker trong watchlist.")
     else:
         progress = st.progress(0)
         status = st.empty()
@@ -1169,8 +1184,8 @@ if run:
             chart_confirmations = load_chart_confirmations()
             results = []
 
-            for i, ticker in enumerate(tickers, start=1):
-                status.info(f"Đang phân tích {ticker}... ({i}/{len(tickers)})")
+            for i, ticker in enumerate(analysis_tickers, start=1):
+                status.info(f"Đang phân tích {ticker}... ({i}/{len(analysis_tickers)})")
                 result = analyze_stock(
                     ticker,
                     market_condition=market_condition,
@@ -1178,7 +1193,7 @@ if run:
                 )
                 result["Market Notes"] = market_notes
                 results.append(result)
-                progress.progress(i / len(tickers))
+                progress.progress(i / len(analysis_tickers))
 
             df = pd.DataFrame(results)
 

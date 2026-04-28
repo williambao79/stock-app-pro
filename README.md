@@ -14,3 +14,8 @@ Cloud-ready Streamlit version for iPhone.
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+
+## Quick Analyze
+
+Bản này có thêm ô **Quick Analyze** để nhập nhanh một hoặc nhiều ticker mới như `HOOD` hoặc `NVDA, TSLA` rồi bấm **RUN QUICK ANALYSIS**. Không cần sửa watchlist chính.
