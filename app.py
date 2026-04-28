@@ -70,9 +70,9 @@ def get_earnings_status(ticker):
         if earnings_date is None:
             return {
                 "status": "Unknown",
-                "date_text": "Unknown",
+                "date": "Unknown",
                 "days_until": None,
-                "risk": "No confirmed earnings date"
+                "note": "No confirmed earnings date"
             }
 
         earnings_date = pd.to_datetime(earnings_date).tz_localize(None)
@@ -96,9 +96,9 @@ def get_earnings_status(ticker):
 
         return {
             "status": status,
-            "date_text": date_text,
+            "date": date_text,
             "days_until": days_until,
-            "risk": risk
+            "note": risk
         }
 
     except Exception as e:
@@ -106,7 +106,7 @@ def get_earnings_status(ticker):
             "status": "Unknown",
             "date_text": "Unknown",
             "days_until": None,
-            "risk": "Earnings data unavailable"
+            "note": "Earnings data unavailable"
         }
 DEFAULT_WATCHLIST = [
     "ENVX", "SOUN", "WULF", "FRMI", "PATH", "RCAT", "QXO",
@@ -1041,6 +1041,7 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
 def save_to_excel(df):
     columns = [
         "Ticker", "Price", "Score", "Signal", "Final Decision",
+        "Earnings Status", "Earnings Date", "Earnings Note",
         "Market Condition", "Market Filter",
         "Trend", "Setup", "Action",
         "RSI", "RSI Status", "Momentum", "Volume Status",
@@ -1287,6 +1288,7 @@ def dataframe_to_excel_bytes(df):
     output = io.BytesIO()
     columns = [
         "Ticker", "Price", "Score", "Signal", "Final Decision",
+        "Earnings Status", "Earnings Date", "Earnings Note",
         "Market Condition", "Market Filter",
         "Trend", "Setup", "Action",
         "RSI", "RSI Status", "Momentum", "Volume Status",
@@ -1406,6 +1408,9 @@ def render_stock_card(row):
     catalyst = row.get("Recent Catalyst", "")
     sec = row.get("Recent SEC Filing", "")
     earnings = row.get("Earnings Warning", "")
+    earnings_status = row.get("Earnings Status", "")
+    earnings_date = row.get("Earnings Date", "")
+    earnings_note = row.get("Earnings Note", "")
     chart_note = row.get("Chart Note", "")
 
     with st.expander(f"Chi tiết {ticker}: lý do, news, SEC"):
@@ -1414,6 +1419,8 @@ def render_stock_card(row):
             st.write(reasons)
         if earnings:
             st.write(f"**Earnings:** {earnings}")
+        if earnings_status or earnings_date or earnings_note:
+            st.write(f"**Earnings Report:** {earnings_status} | {earnings_date} | {earnings_note}")
         if chart_note:
             st.write(f"**Chart note:** {chart_note}")
         if catalyst:
