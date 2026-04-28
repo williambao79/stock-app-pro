@@ -1387,7 +1387,7 @@ def render_stock_card(row):
                 <span class="badge {badge_class(decision)}">{decision}</span>
             </div>
             <div class="metric-grid">
-                <div class="metric-box"><div class="metric-label">Best Entry Now</div><div class="metric-value">{entry or '—'}</div></div>
+                <div class="metric-box"><div class="metric-label">Entry Zone</div><div class="metric-value">{entry or '—'}</div></div>
                 <div class="metric-box"><div class="metric-label">Stop loss</div><div class="metric-value">{stop}</div></div>
                 <div class="metric-box"><div class="metric-label">Target</div><div class="metric-value">{target1} / {target2}</div></div>
                 <div class="metric-box"><div class="metric-label">Risk / Reward</div><div class="metric-value">{rr}</div></div>
@@ -1399,7 +1399,10 @@ def render_stock_card(row):
                 <span class="pill">Support: {support}</span>
                 <span class="pill">Resistance: {resistance}</span>
             </div>
-            <div class="action-box"><b>Action:</b> {action or '—'}<br><span class="small-muted">Deep Safe Entry: {safe_entry or '—'}</span></div>
+            <div class="action-box">
+            <b>Action:</b> {action or '—'}<br>
+            <span class="small-muted">Deep Safe Entry: {safe_entry or '—'}</span></br>
+            <span class="small-muted">Entry zone only. Check Final Decision before buying.</span>
         </div>
         """,
         unsafe_allow_html=True,
