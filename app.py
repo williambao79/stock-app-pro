@@ -9,7 +9,7 @@ from copy import copy
 
 import yfinance as yf
 import pandas as pd
-
+from datetime import datetime, timedelta
 try:
     from openpyxl import load_workbook
 except Exception:
@@ -19,7 +19,95 @@ WATCHLIST_FILE = "watchlist.txt"
 TEMPLATE_FILE = "market_template.xlsx"
 CHART_CONFIRMATION_FILE = "chart_confirmation.json"
 OUTPUT_FILE = "market_template.xlsx"
+@st.cache_data(ttl=3600)
+def get_earnings_status(ticker):
+    """
+    Lấy ngày earnings gần nhất bằng yfinance.
+    Trả về:
+    - status: trạng thái earnings
+    - date_text: ngày earnings nếu có
+    - days_until: số ngày còn lại
+    """
 
+    try:
+        stock = yf.Ticker(ticker)
+
+        earnings_date = None
+
+        # Cách 1: lấy từ get_earnings_dates
+        try:
+            ed = stock.get_earnings_dates(limit=12)
+            if ed is not None and not ed.empty:
+                today = pd.Timestamp.today(tz=ed.index.tz) if ed.index.tz is not None else pd.Timestamp.today()
+                future_dates = ed[ed.index >= today]
+
+                if not future_dates.empty:
+                    earnings_date = future_dates.index[0]
+                else:
+                    earnings_date = ed.index[0]
+        except Exception:
+            pass
+
+        # Cách 2: fallback dùng calendar
+        if earnings_date is None:
+            try:
+                cal = stock.calendar
+                if cal is not None and len(cal) > 0:
+                    if isinstance(cal, dict):
+                        possible = cal.get("Earnings Date")
+                        if possible is not None:
+                            if isinstance(possible, list):
+                                earnings_date = possible[0]
+                            else:
+                                earnings_date = possible
+                    else:
+                        if "Earnings Date" in cal.index:
+                            possible = cal.loc["Earnings Date"][0]
+                            earnings_date = possible
+            except Exception:
+                pass
+
+        if earnings_date is None:
+            return {
+                "status": "Unknown",
+                "date_text": "Unknown",
+                "days_until": None,
+                "risk": "No confirmed earnings date"
+            }
+
+        earnings_date = pd.to_datetime(earnings_date).tz_localize(None)
+        today = pd.Timestamp.today().normalize()
+        days_until = (earnings_date.normalize() - today).days
+
+        date_text = earnings_date.strftime("%Y-%m-%d")
+
+        if 0 <= days_until <= 7:
+            status = "High Risk"
+            risk = f"Earnings in {days_until} day(s)"
+        elif 8 <= days_until <= 14:
+            status = "Caution"
+            risk = f"Earnings soon: {days_until} day(s)"
+        elif days_until < 0:
+            status = "Reported"
+            risk = f"Last earnings was {abs(days_until)} day(s) ago"
+        else:
+            status = "Clear"
+            risk = f"Earnings is {days_until} day(s) away"
+
+        return {
+            "status": status,
+            "date_text": date_text,
+            "days_until": days_until,
+            "risk": risk
+        }
+
+    except Exception as e:
+        return {
+            "status": "Unknown",
+            "date_text": "Unknown",
+            "days_until": None,
+            "risk": "Earnings data unavailable"
+        }
 DEFAULT_WATCHLIST = [
     "ENVX", "SOUN", "WULF", "FRMI", "PATH", "RCAT", "QXO",
     "NVDA", "VGT", "VOO", "SLV", "GDX"
@@ -867,8 +955,15 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         # Final Decision
         # -------------------------------
 
-        if "High Risk" in earnings_warning:
+        earnings_info = get_earnings_status(ticker)
+        earnings_status = earnings_info["status"]
+        earnings_date = earnings_info["date"]
+        earnings_note = earnings_info["note"]
+
+        if earnings_status == "High Risk":
             final_decision = "NO TRADE - Earnings Risk"
+        elif earnings_status == "Caution" and signal == "BUY":
+            final_decision = "CAUTION - Earnings Soon"
         elif sec_filing_risk == "High":
             final_decision = "NO TRADE - SEC Filing Risk"
         elif chart_confirmation == "Weak / Breakdown":
