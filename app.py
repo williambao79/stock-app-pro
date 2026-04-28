@@ -1,16 +1,20 @@
 import requests
 import json
 import time
+import re
+from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
 
 SEC_USER_AGENT = "StockAnalyzerPro/1.0 contact@example.com"
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from copy import copy
 
 import yfinance as yf
 import pandas as pd
 import streamlit as st
-from datetime import datetime, timedelta
+import io
+
 try:
     from openpyxl import load_workbook
 except Exception:
@@ -20,99 +24,24 @@ WATCHLIST_FILE = "watchlist.txt"
 TEMPLATE_FILE = "market_template.xlsx"
 CHART_CONFIRMATION_FILE = "chart_confirmation.json"
 OUTPUT_FILE = "market_template.xlsx"
-@st.cache_data(ttl=3600)
-def get_earnings_status(ticker):
-    """
-    Lấy ngày earnings gần nhất bằng yfinance.
-    Trả về:
-    - status: trạng thái earnings
-    - date_text: ngày earnings nếu có
-    - days_until: số ngày còn lại
-    """
 
-    try:
-        stock = yf.Ticker(ticker)
-
-        earnings_date = None
-
-        # Cách 1: lấy từ get_earnings_dates
-        try:
-            ed = stock.get_earnings_dates(limit=12)
-            if ed is not None and not ed.empty:
-                today = pd.Timestamp.today(tz=ed.index.tz) if ed.index.tz is not None else pd.Timestamp.today()
-                future_dates = ed[ed.index >= today]
-
-                if not future_dates.empty:
-                    earnings_date = future_dates.index[0]
-                else:
-                    earnings_date = ed.index[0]
-        except Exception:
-            pass
-
-        # Cách 2: fallback dùng calendar
-        if earnings_date is None:
-            try:
-                cal = stock.calendar
-                if cal is not None and len(cal) > 0:
-                    if isinstance(cal, dict):
-                        possible = cal.get("Earnings Date")
-                        if possible is not None:
-                            if isinstance(possible, list):
-                                earnings_date = possible[0]
-                            else:
-                                earnings_date = possible
-                    else:
-                        if "Earnings Date" in cal.index:
-                            possible = cal.loc["Earnings Date"][0]
-                            earnings_date = possible
-            except Exception:
-                pass
-
-        if earnings_date is None:
-            return {
-                "status": "Unknown",
-                "date": "Unknown",
-                "days_until": None,
-                "note": "No confirmed earnings date"
-            }
-
-        earnings_date = pd.to_datetime(earnings_date).tz_localize(None)
-        today = pd.Timestamp.today().normalize()
-        days_until = (earnings_date.normalize() - today).days
-
-        date_text = earnings_date.strftime("%Y-%m-%d")
-
-        if 0 <= days_until <= 7:
-            status = "High Risk"
-            risk = f"Earnings in {days_until} day(s)"
-        elif 8 <= days_until <= 14:
-            status = "Caution"
-            risk = f"Earnings soon: {days_until} day(s)"
-        elif days_until < 0:
-            status = "Reported"
-            risk = f"Last earnings was {abs(days_until)} day(s) ago"
-        else:
-            status = "Clear"
-            risk = f"Earnings is {days_until} day(s) away"
-
-        return {
-            "status": status,
-            "date": date_text,
-            "days_until": days_until,
-            "note": risk
-        }
-
-    except Exception as e:
-        return {
-            "status": "Unknown",
-            "date_text": "Unknown",
-            "days_until": None,
-            "note": "Earnings data unavailable"
-        }
 DEFAULT_WATCHLIST = [
     "ENVX", "SOUN", "WULF", "FRMI", "PATH", "RCAT", "QXO",
     "NVDA", "VGT", "VOO", "SLV", "GDX"
 ]
+
+# ETF / Fund symbols: these do not have company-style earnings reports
+# and usually should not be screened with SEC company filing risk.
+ETF_SYMBOLS = {
+    "VOO", "VTI", "VT", "SPY", "QQQ", "DIA", "IWM",
+    "VGT", "VUG", "VTV", "SCHD", "XLK", "XLF", "XLE", "XLV", "XLY", "XLI", "XLP", "XLU", "XLB", "XLRE",
+    "SMH", "SOXX", "ARKK", "ARKG", "ARKW",
+    "SLV", "GLD", "IAU", "GDX", "GDXJ", "SIL", "SILJ",
+    "URA", "URNM", "USO", "UNG", "TLT", "IEF", "SHY", "HYG", "LQD"
+}
+
+def is_etf_symbol(ticker):
+    return str(ticker).strip().upper() in ETF_SYMBOLS
 
 def load_chart_confirmations():
     if not os.path.exists(CHART_CONFIRMATION_FILE):
@@ -284,48 +213,159 @@ def get_market_condition():
     return market, "; ".join(notes)
 
 
+def normalize_earnings_date(value):
+    """Convert many possible earnings-date formats to a pandas Timestamp or None."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            value = value[0]
+        if isinstance(value, pd.Series):
+            value = value.dropna().iloc[0] if len(value.dropna()) else None
+        if value is None:
+            return None
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return ts.tz_localize(None) if getattr(ts, "tzinfo", None) is not None else ts
+    except Exception:
+        return None
+
+
+def get_nasdaq_earnings_date(ticker):
+    """Backup earnings lookup from Nasdaq's public calendar endpoint. No API key required, but may fail."""
+    try:
+        url = f"https://api.nasdaq.com/api/calendar/earnings?symbol={ticker.upper()}"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://www.nasdaq.com",
+            "Referer": "https://www.nasdaq.com/market-activity/earnings",
+        }
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        rows = data.get("data", {}).get("rows", []) or []
+        candidates = []
+        for row in rows:
+            raw_date = row.get("date") or row.get("reportDate") or row.get("time")
+            ts = normalize_earnings_date(raw_date)
+            if ts is not None:
+                candidates.append(ts)
+        if not candidates:
+            return None
+        today = pd.Timestamp.today().normalize()
+        future = sorted([d for d in candidates if d.normalize() >= today])
+        return future[0] if future else sorted(candidates)[-1]
+    except Exception:
+        return None
+
+
 def get_earnings_warning(ticker):
+    info = get_earnings_status(ticker)
+    status = info.get("status", "Unknown")
+    days = info.get("days_until")
+    if status == "ETF / No Earnings":
+        return "ETF / No Earnings"
+    if status == "High Risk":
+        return f"High Risk: Earnings in {days} days"
+    if status == "Caution":
+        return f"Watch: Earnings in {days} days"
+    if status == "Clear":
+        return f"OK: Earnings in {days} days"
+    if status == "Reported":
+        return "Past/Unknown"
+    return "Unknown"
+
+
+def get_earnings_status(ticker):
+    """
+    Multi-source earnings lookup:
+    1) yfinance get_earnings_dates
+    2) yfinance calendar
+    3) Nasdaq public earnings calendar backup
+    """
+    if is_etf_symbol(ticker):
+        return {
+            "status": "ETF / No Earnings",
+            "date": "N/A",
+            "days_until": None,
+            "note": "ETF/Fund - no company earnings report",
+            "source": "ETF filter"
+        }
+
+    earnings_date = None
+    source = "Unknown"
+
     try:
         stock = yf.Ticker(ticker)
-        calendar = stock.calendar
 
-        if calendar is None or len(calendar) == 0:
-            return "Unknown"
-
-        earnings_date = None
-
-        if isinstance(calendar, pd.DataFrame):
-            for idx in calendar.index:
-                if "Earnings" in str(idx):
-                    value = calendar.loc[idx].dropna()
-                    if len(value) > 0:
-                        earnings_date = pd.to_datetime(value.iloc[0]).date()
-                        break
-        elif isinstance(calendar, dict):
-            for key, value in calendar.items():
-                if "Earnings" in str(key):
-                    if isinstance(value, (list, tuple)) and len(value) > 0:
-                        earnings_date = pd.to_datetime(value[0]).date()
-                    else:
-                        earnings_date = pd.to_datetime(value).date()
-                    break
+        try:
+            ed = stock.get_earnings_dates(limit=12)
+            if ed is not None and not ed.empty:
+                today = pd.Timestamp.today(tz=ed.index.tz) if ed.index.tz is not None else pd.Timestamp.today()
+                future_dates = ed[ed.index >= today]
+                earnings_date = future_dates.index[0] if not future_dates.empty else ed.index[0]
+                source = "yfinance earnings_dates"
+        except Exception:
+            pass
 
         if earnings_date is None:
-            return "Unknown"
+            try:
+                cal = stock.calendar
+                if cal is not None and len(cal) > 0:
+                    possible = None
+                    if isinstance(cal, dict):
+                        possible = cal.get("Earnings Date") or cal.get("EarningsDate")
+                    elif hasattr(cal, "index"):
+                        for idx in cal.index:
+                            if "Earnings" in str(idx):
+                                value = cal.loc[idx]
+                                possible = value.dropna().iloc[0] if hasattr(value, "dropna") else value
+                                break
+                    ts = normalize_earnings_date(possible)
+                    if ts is not None:
+                        earnings_date = ts
+                        source = "yfinance calendar"
+            except Exception:
+                pass
 
-        today = datetime.now().date()
-        days = (earnings_date - today).days
+        if earnings_date is None:
+            ts = get_nasdaq_earnings_date(ticker)
+            if ts is not None:
+                earnings_date = ts
+                source = "Nasdaq backup"
 
-        if 0 <= days <= 7:
-            return f"High Risk: Earnings in {days} days"
-        elif 8 <= days <= 14:
-            return f"Watch: Earnings in {days} days"
-        elif days > 14:
-            return f"OK: Earnings in {days} days"
+        if earnings_date is None:
+            return {"status": "Unknown", "date": "Unknown", "days_until": None, "note": "No confirmed earnings date", "source": source}
+
+        earnings_date = normalize_earnings_date(earnings_date)
+        if earnings_date is None:
+            return {"status": "Unknown", "date": "Unknown", "days_until": None, "note": "Earnings date unreadable", "source": source}
+
+        today = pd.Timestamp.today().normalize()
+        days_until = (earnings_date.normalize() - today).days
+        date_text = earnings_date.strftime("%Y-%m-%d")
+
+        if 0 <= days_until <= 7:
+            status = "High Risk"
+            note = f"Earnings in {days_until} day(s)"
+        elif 8 <= days_until <= 14:
+            status = "Caution"
+            note = f"Earnings soon: {days_until} day(s)"
+        elif days_until < 0:
+            status = "Reported"
+            note = f"Last earnings was {abs(days_until)} day(s) ago"
         else:
-            return "Past/Unknown"
-    except Exception:
-        return "Unknown"
+            status = "Clear"
+            note = f"Earnings is {days_until} day(s) away"
+
+        return {"status": status, "date": date_text, "days_until": days_until, "note": f"{note} | Source: {source}", "source": source}
+
+    except Exception as e:
+        return {"status": "Unknown", "date": "Unknown", "days_until": None, "note": f"Earnings data unavailable: {str(e)[:80]}", "source": source}
+
 
 def safe_text(value):
     if value is None:
@@ -362,91 +402,112 @@ def simple_news_sentiment(text):
     return "Neutral"
 
 
+def fetch_rss_titles(url, source_name, max_items=5):
+    """Read simple RSS/Atom feeds and return recent news titles."""
+    titles = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200 or not r.text:
+            return []
+        root = ET.fromstring(r.content)
+        for item in root.findall(".//item")[:max_items]:
+            title = item.findtext("title") or ""
+            if title:
+                titles.append({"title": safe_text(title), "source": source_name})
+        if not titles:
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall(".//atom:entry", ns)[:max_items]:
+                title = entry.findtext("atom:title", default="", namespaces=ns)
+                if title:
+                    titles.append({"title": safe_text(title), "source": source_name})
+    except Exception:
+        return []
+    return titles
+
+
+def classify_news_risk_from_titles(titles):
+    text = " | ".join([t.get("title", "") for t in titles]).lower()
+    if not text:
+        return "Neutral", "Unknown"
+
+    high_risk_phrases = [
+        "offering", "shelf offering", "registered direct", "public offering", "dilution",
+        "bankruptcy", "going concern", "fraud", "sec investigation", "investigation",
+        "lawsuit", "class action", "downgrade", "cuts guidance", "misses estimates",
+        "resignation", "restatement", "short seller"
+    ]
+    positive_phrases = [
+        "contract", "partnership", "deal", "award", "beats", "beat estimates",
+        "raises guidance", "upgrade", "upgraded", "buy rating", "outperform",
+        "launch", "approval", "record revenue", "strong demand", "expands", "growth"
+    ]
+
+    neg = sum(1 for p in high_risk_phrases if p in text)
+    pos = sum(1 for p in positive_phrases if p in text)
+
+    if neg >= 2:
+        return "Negative", "High"
+    if neg == 1 and pos == 0:
+        return "Negative", "Medium"
+    if pos > neg:
+        return "Positive", "Low"
+    if neg > pos:
+        return "Negative", "Medium"
+    return "Neutral", "Medium"
+
+
 def get_yahoo_news_signal(ticker):
+    """Multi-source news check: yfinance/Yahoo + Yahoo RSS + Google News RSS."""
+    all_titles = []
     try:
         stock = yf.Ticker(ticker)
-        news = stock.news
-
-        if not news:
-            return {
-                "News Sentiment": "Neutral",
-                "News Risk": "Unknown",
-                "Recent Catalyst": "No Yahoo news found"
-            }
-
-        titles = []
+        news = stock.news or []
         now_ts = datetime.now().timestamp()
-        recent_count = 0
-
         for item in news[:10]:
             title = ""
-
-            # Old yfinance format
+            days_old = 999
             if isinstance(item, dict):
                 title = safe_text(item.get("title", ""))
-
-                # New yfinance format sometimes stores title inside content
-                if title == "" and isinstance(item.get("content"), dict):
-                    content = item.get("content", {})
-                    title = safe_text(content.get("title", ""))
-
-                # Another possible nested format
-                if title == "" and isinstance(item.get("content"), dict):
-                    content = item.get("content", {})
-                    title = safe_text(content.get("headline", ""))
-
-                publish_time = item.get("providerPublishTime")
-
-                if publish_time is None and isinstance(item.get("content"), dict):
-                    content = item.get("content", {})
-                    publish_time = content.get("pubDate")
-
-                if isinstance(publish_time, str):
-                    try:
+                content = item.get("content", {}) if isinstance(item.get("content"), dict) else {}
+                if title == "":
+                    title = safe_text(content.get("title", "") or content.get("headline", ""))
+                publish_time = item.get("providerPublishTime") or content.get("pubDate")
+                try:
+                    if isinstance(publish_time, str):
                         publish_dt = pd.to_datetime(publish_time)
                         days_old = (datetime.now() - publish_dt.to_pydatetime().replace(tzinfo=None)).days
-                    except Exception:
-                        days_old = 999
-                elif publish_time:
-                    days_old = (now_ts - float(publish_time)) / 86400
-                else:
+                    elif publish_time:
+                        days_old = (now_ts - float(publish_time)) / 86400
+                except Exception:
                     days_old = 999
+            if title and days_old <= 30:
+                all_titles.append({"title": title, "source": "Yahoo/yfinance"})
+    except Exception:
+        pass
 
-                if title:
-                    if days_old <= 21:
-                        recent_count += 1
-                    titles.append(title)
+    yahoo_rss = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker.upper()}&region=US&lang=en-US"
+    all_titles.extend(fetch_rss_titles(yahoo_rss, "Yahoo RSS", max_items=5))
 
-        if not titles:
-            return {
-                "News Sentiment": "Neutral",
-                "News Risk": "Unknown",
-                "Recent Catalyst": "No readable Yahoo news title"
-            }
+    google_query = quote_plus(f"{ticker.upper()} stock OR shares")
+    google_rss = f"https://news.google.com/rss/search?q={google_query}&hl=en-US&gl=US&ceid=US:en"
+    all_titles.extend(fetch_rss_titles(google_rss, "Google News RSS", max_items=5))
 
-        combined = " | ".join(titles[:2])
-        short_catalyst = combined[:120]
-        sentiment = simple_news_sentiment(combined)
+    seen = set()
+    unique = []
+    for item in all_titles:
+        title = re.sub(r"\s+", " ", item.get("title", "")).strip()
+        key = title.lower()
+        if title and key not in seen:
+            seen.add(key)
+            unique.append({"title": title, "source": item.get("source", "News")})
 
-        if sentiment == "Negative":
-            news_risk = "High"
-        elif sentiment == "Positive":
-            news_risk = "Low"
-        else:
-            news_risk = "Medium" if recent_count > 0 else "Unknown"
+    if not unique:
+        return {"News Sentiment": "Neutral", "News Risk": "Unknown", "Recent Catalyst": "No readable news found from Yahoo/Google RSS"}
 
-        return {
-            "News Sentiment": sentiment,
-            "News Risk": news_risk,
-            "Recent Catalyst": short_catalyst
-        }
-
-    except Exception as e:
-        return {
-            "News Sentiment": "Neutral",
-            "News Risk": "Unknown",
-            "Recent Catalyst": f"News check error: {str(e)[:120]}"
-        }
+    sentiment, news_risk = classify_news_risk_from_titles(unique[:8])
+    catalyst = " | ".join([f"{x['source']}: {x['title']}" for x in unique[:3]])[:700]
+    return {"News Sentiment": sentiment, "News Risk": news_risk, "Recent Catalyst": catalyst}
 
 
 def get_sec_cik_map():
@@ -486,99 +547,100 @@ def get_sec_cik_map():
 
 
 def get_sec_filing_signal(ticker):
+    """
+    Smarter SEC filter. High risk only for recent financing/dilution, resale, warrants,
+    going-concern, restatement, investigation, or bankruptcy-type filings.
+    """
+    if is_etf_symbol(ticker):
+        return {
+            "SEC Filing Risk": "ETF / Not Applicable",
+            "Recent SEC Filing": "ETF/Fund - SEC company filing risk not applicable"
+        }
+
     try:
         ticker_map = get_sec_cik_map()
         info = ticker_map.get(ticker.upper())
-
         if not info:
-            return {
-                "SEC Filing Risk": "Unknown",
-                "Recent SEC Filing": "Ticker not found in SEC ticker list"
-            }
+            return {"SEC Filing Risk": "Unknown", "Recent SEC Filing": "Ticker not found in SEC ticker list"}
 
         cik = str(info["cik"]).zfill(10)
-
-        headers = {
-            "User-Agent": SEC_USER_AGENT,
-            "Accept-Encoding": "gzip, deflate",
-            "Host": "data.sec.gov"
-        }
-
+        headers = {"User-Agent": SEC_USER_AGENT, "Accept-Encoding": "gzip, deflate", "Host": "data.sec.gov"}
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
-
         data = r.json()
         recent = data.get("filings", {}).get("recent", {})
 
         forms = recent.get("form", [])
         filing_dates = recent.get("filingDate", [])
         descriptions = recent.get("primaryDocDescription", [])
-        accession_nums = recent.get("accessionNumber", [])
-
         today = datetime.now().date()
         recent_items = []
 
-        for i in range(min(len(forms), 25)):
-            form = safe_text(forms[i])
-            filing_date_raw = safe_text(filing_dates[i])
+        for i in range(min(len(forms), 35)):
+            form = safe_text(forms[i]).upper()
+            filing_date_raw = safe_text(filing_dates[i]) if i < len(filing_dates) else ""
             desc = safe_text(descriptions[i]) if i < len(descriptions) else ""
-            accession = safe_text(accession_nums[i]) if i < len(accession_nums) else ""
-
             try:
                 filing_date = datetime.strptime(filing_date_raw, "%Y-%m-%d").date()
                 days_old = (today - filing_date).days
             except Exception:
                 days_old = 999
-
-            if days_old <= 45:
-                recent_items.append({
-                    "form": form,
-                    "date": filing_date_raw,
-                    "desc": desc,
-                    "accession": accession,
-                    "days_old": days_old
-                })
+            if days_old <= 60:
+                recent_items.append({"form": form, "date": filing_date_raw, "desc": desc, "days_old": days_old})
 
         if not recent_items:
-            return {
-                "SEC Filing Risk": "Low",
-                "Recent SEC Filing": "No major recent SEC filing in 45 days"
-            }
+            return {"SEC Filing Risk": "Low", "Recent SEC Filing": "No major recent SEC filing in 60 days"}
 
-        risky_forms = {"S-1", "S-3", "F-1", "F-3", "424B3", "424B4", "424B5", "424B7", "424B8", "FWP"}
-        medium_forms = {"8-K", "10-Q", "10-K", "6-K"}
-        insider_forms = {"3", "4", "5"}
+        high_forms = {"S-1", "S-3", "F-1", "F-3", "424B3", "424B4", "424B5", "424B7", "424B8", "FWP"}
+        medium_forms = {"8-K", "10-Q", "10-K", "6-K", "20-F"}
+        low_forms = {"3", "4", "5", "DEF 14A", "DEFA14A", "SC 13G", "SC 13D"}
+        high_keywords = ["offering", "shelf", "prospectus", "atm", "at-the-market", "warrant", "resale", "convertible", "senior notes", "going concern", "restatement", "investigation", "subpoena", "bankruptcy", "chapter 11", "delisting", "material weakness", "default", "termination"]
+        medium_keywords = ["acquisition", "merger", "credit agreement", "debt", "financing", "strategic review", "restructuring", "layoff", "cost reduction"]
 
-        risk = "Low"
+        risk_score = 0
         notes = []
-
-        for item in recent_items[:8]:
+        high_notes = []
+        for item in recent_items[:10]:
             form = item["form"]
             desc = item["desc"]
-            text = f"{form} {desc}".lower()
+            days_old = item["days_old"]
+            text_l = f"{form} {desc}".lower()
             label = f"{item['date']} {form} {desc}".strip()
             notes.append(label)
+            if form in high_forms and days_old <= 45:
+                risk_score = max(risk_score, 3)
+                high_notes.append(label)
+            if any(k in text_l for k in high_keywords) and days_old <= 45:
+                risk_score = max(risk_score, 3)
+                high_notes.append(label)
+            elif any(k in text_l for k in medium_keywords) and days_old <= 45:
+                risk_score = max(risk_score, 2)
+            elif form in medium_forms and days_old <= 21:
+                risk_score = max(risk_score, 1)
+            elif form in low_forms:
+                risk_score = max(risk_score, 0)
 
-            if form in risky_forms:
-                risk = "High"
-            elif any(w in text for w in ["offering", "shelf", "prospectus", "atm", "warrant", "resale"]):
-                risk = "High"
-            elif form in medium_forms and risk != "High":
-                risk = "Medium"
-            elif form in insider_forms and risk == "Low":
-                risk = "Low"
+        if risk_score >= 3:
+            risk = "High"
+            prefix = "High-risk SEC item: "
+            body = " | ".join(high_notes[:3]) if high_notes else " | ".join(notes[:3])
+        elif risk_score == 2:
+            risk = "Medium"
+            prefix = "Medium-risk SEC item: "
+            body = " | ".join(notes[:4])
+        elif risk_score == 1:
+            risk = "Medium"
+            prefix = "Normal recent SEC filing; review: "
+            body = " | ".join(notes[:4])
+        else:
+            risk = "Low"
+            prefix = "Recent SEC filings appear normal: "
+            body = " | ".join(notes[:4])
 
-        return {
-            "SEC Filing Risk": risk,
-            "Recent SEC Filing": " | ".join(notes[:5])[:700]
-        }
-
+        return {"SEC Filing Risk": risk, "Recent SEC Filing": (prefix + body)[:700]}
     except Exception as e:
-        return {
-            "SEC Filing Risk": "Unknown",
-            "Recent SEC Filing": f"SEC check error: {str(e)[:150]}"
-        }
+        return {"SEC Filing Risk": "Unknown", "Recent SEC Filing": f"SEC check error: {str(e)[:150]}"}
 
 
 def get_news_sec_summary(ticker):
@@ -593,6 +655,29 @@ def get_news_sec_summary(ticker):
         "SEC Filing Risk": sec.get("SEC Filing Risk", "Unknown"),
         "Recent SEC Filing": sec.get("Recent SEC Filing", "")
     }
+def get_chart_confirmation_needed(final_decision, signal, setup, trend):
+    d = str(final_decision).upper()
+    s = str(signal).upper()
+
+    if "NO TRADE" in d:
+        return "Không vào lệnh; chỉ theo dõi hoặc chờ rủi ro giảm"
+    if "BREAKOUT" in d:
+        return "Xác nhận breakout: đóng trên resistance + volume mạnh"
+    if "REVERSAL" in d:
+        return "Xác nhận reversal: nến xanh giữ support / higher low"
+    if "PULLBACK" in d:
+        return "Chờ pullback về Entry Zone và có nến giữ support"
+    if "WATCH TO ENTER" in d or "BUY WATCH" in s:
+        return "Có thể canh vào nhưng phải xác nhận chart trước khi mua"
+    if "WAIT" in d:
+        return "Chờ setup rõ hơn; chưa mua ngay"
+    return "Luôn kiểm tra chart trước khi vào lệnh"
+
+
+def get_app_role(final_decision):
+    return "Lọc mã + cảnh báo rủi ro + gợi ý vùng giá; không phải lệnh mua tự động"
+
+
 def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
     if chart_confirmations is None:
         chart_confirmations = {}
@@ -614,6 +699,8 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         previous = data.iloc[-2]
 
         close = float(latest["Close"])
+        prev_close = float(previous["Close"])
+        day_change_pct = ((close - prev_close) / prev_close) * 100 if prev_close > 0 else 0
         ema9 = float(latest["EMA9"])
         ema21 = float(latest["EMA21"])
         ema50 = float(latest["EMA50"])
@@ -855,9 +942,22 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             target_2 = resistance
             risk_reward = 0
         else:
-            target_1 = close + risk * 1.5
-            target_2 = resistance
-            reward = max(target_1, target_2) - close
+            rr_target_1 = close + risk * 1.5
+            rr_target_2 = close + risk * 2.5
+
+            # Target 1 phải là mục tiêu gần hơn; Target 2 là mục tiêu xa hơn.
+            # Nếu resistance gần hơn target theo R/R, lấy resistance làm Target 1.
+            if resistance > close:
+                target_1 = min(resistance, rr_target_1)
+                target_2 = max(resistance, rr_target_1)
+            else:
+                target_1 = rr_target_1
+                target_2 = rr_target_2
+
+            if target_2 < target_1:
+                target_1, target_2 = target_2, target_1
+
+            reward = target_2 - close
             risk_reward = reward / risk if risk > 0 else 0
 
         earnings_warning = get_earnings_warning(ticker)
@@ -876,21 +976,36 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         reversal_watch = False
         breakout_watch = False
         pullback_watch = False
+        falling_knife = False
+
+        # FALLING KNIFE FILTER:
+        # Nếu giá đang rơi mạnh, nhất là trong downtrend/mixed trend, không bắt đáy ngay tại support.
+        if (
+            (day_change_pct <= -5)
+            or (
+                trend in ["Downtrend", "Mixed"]
+                and day_change_pct <= -3
+                and volume_status in ["Above Average", "Strong Volume", "Normal/Weak"]
+            )
+        ):
+            falling_knife = True
+            score -= 1
+            reasons.append("Falling knife risk: giá đang rơi mạnh, cần nến xanh xác nhận trước khi vào")
 
         # REVERSAL WATCH:
-        # Dành cho cổ phiếu còn Downtrend/Mixed nhưng đang hồi từ vùng thấp.
+        # Dành cho cổ phiếu Downtrend/Mixed nhưng có dấu hiệu hồi từ vùng thấp.
         if (
             market_condition != "Bearish"
-            and trend in ["Strong Uptrend", "Uptrend", "Neutral Up"]
-            and 45 <= rsi <= 68
+            and trend in ["Downtrend", "Mixed"]
+            and 35 <= rsi <= 58
             and momentum in ["Strong", "Positive", "Improving"]
             and setup in ["Middle Zone", "Near Support"]
-            and volume_status in ["Normal/Weak", "Above Average", "Strong Volume"]
-            and score >= 2
+            and chart_confirmation != "Weak / Breakdown"
+            and score >= 0
         ):
-            breakout_watch = True
+            reversal_watch = True
             score += 1
-            reasons.append("Đang hồi tốt nhưng cần breakout/volume xác nhận")
+            reasons.append("Reversal setup: cần nến xanh giữ support / higher low xác nhận")
 
         # BREAKOUT WATCH:
         # Dành cho cổ phiếu đang khá lên, market ủng hộ, momentum tốt,
@@ -974,7 +1089,10 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
                 score = 3
 
             reasons.append("Recovery/uptrend setup: nên theo dõi breakout thay vì bỏ qua")
-        if score >= 8 and entry_quality in ["Near Entry", "Good Pullback Entry"] and market_condition != "Bearish":
+        if falling_knife:
+            signal = "AVOID"
+            action = "Support Test - chờ nến xanh xác nhận giữ support, không bắt dao rơi"
+        elif score >= 8 and entry_quality in ["Near Entry", "Good Pullback Entry"] and market_condition != "Bearish":
             signal = "BUY WATCH"
             action = "Có thể canh vào nếu nến xác nhận"
         elif reversal_watch:
@@ -1004,12 +1122,14 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
 
         if earnings_status == "High Risk":
             final_decision = "NO TRADE - Earnings Risk"
-        elif earnings_status == "Caution" and signal == "BUY":
+        elif earnings_status == "Caution":
             final_decision = "CAUTION - Earnings Soon"
         elif sec_filing_risk == "High":
             final_decision = "NO TRADE - SEC Filing Risk"
         elif chart_confirmation == "Weak / Breakdown":
             final_decision = "NO TRADE - Chart Weak"
+        elif falling_knife:
+            final_decision = "NO TRADE - Falling Knife"
         elif news_risk == "High" and signal != "BUY WATCH":
             final_decision = "NO TRADE - News Risk"
         elif market_condition == "Bearish" and signal != "BUY WATCH":
@@ -1034,6 +1154,25 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             action = "Breakout Watch - chờ vượt resistance hoặc volume xác nhận" if final_decision == "BREAKOUT WATCH" else "Reversal Watch - chờ vượt kháng cự hoặc giữ support" if final_decision == "REVERSAL WATCH" else action
             score = max(score, 3) if final_decision in ["BREAKOUT WATCH", "REVERSAL WATCH"] else score
 
+
+        # Aggressive Entry = vùng vào sớm hơn, gần giá hiện tại hơn Entry Zone.
+        # Entry Zone vẫn là vùng chính theo support. Deep Safe Entry là vùng pullback sâu hơn.
+        if setup == "Near Resistance":
+            early_entry_low = close * 0.95
+            early_entry_high = close * 0.98
+        elif aggressive_entry_low <= close <= aggressive_entry_high:
+            early_entry_low = max(aggressive_entry_low, close * 0.985)
+            early_entry_high = min(aggressive_entry_high, close * 1.01)
+        elif close > aggressive_entry_high:
+            early_entry_low = close * 0.975
+            early_entry_high = close * 1.005
+        else:
+            early_entry_low = aggressive_entry_low
+            early_entry_high = min(aggressive_entry_high, close * 1.01)
+
+        early_entry_low = max(early_entry_low, 0)
+        early_entry_high = max(early_entry_high, early_entry_low)
+
         return {
             "Ticker": ticker,
             "Price": round(close, 2),
@@ -1042,20 +1181,21 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             "Final Decision": final_decision,
             "Earnings Status": earnings_status,
             "Earnings Date": earnings_date,
-            "Earnings Note": earnings_note,
             "Market Condition": market_condition,
             "Market Filter": market_filter,
             "Trend": trend,
             "Setup": setup,
             "Action": action,
             "RSI": round(rsi, 2),
+            "Day Change %": round(day_change_pct, 2),
             "RSI Status": rsi_status,
             "Momentum": momentum,
             "Volume Status": volume_status,
             "Support": round(support, 2),
             "Resistance": round(resistance, 2),
-            "Aggressive Entry": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
-            "Safe Entry": f"{round(safe_entry_low, 2)} - {round(safe_entry_high, 2)}",
+            "Entry Zone": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
+            "Deep Safe Entry": f"{round(safe_entry_low, 2)} - {round(safe_entry_high, 2)}",
+            "Aggressive Entry": f"{round(early_entry_low, 2)} - {round(early_entry_high, 2)}",
             "Entry Distance %": round(entry_distance_pct, 2),
             "Entry Quality": entry_quality,
             "Aggressive Stop": round(aggressive_stop, 2),
@@ -1083,17 +1223,17 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
 def save_to_excel(df):
     columns = [
         "Ticker", "Price", "Score", "Signal", "Final Decision",
-        "Earnings Status", "Earnings Date", "Earnings Note",
+        "Earnings Status", "Earnings Date",
         "Market Condition", "Market Filter",
         "Trend", "Setup", "Action",
-        "RSI", "RSI Status", "Momentum", "Volume Status",
+        "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
         "Support", "Resistance",
-        "Aggressive Entry", "Safe Entry", "Entry Distance %",
+        "Entry Zone", "Deep Safe Entry",
+        "Aggressive Entry", "Entry Distance %",
         "Entry Quality",
         "Aggressive Stop", "Safe Stop", "Stop Loss",
         "Target 1", "Target 2", "Risk/Reward",
         "Chart Confirmation", "Chart Adjustment", "Chart Note",
-        "Earnings Warning",
         "News Sentiment", "News Risk", "Recent Catalyst",
         "SEC Filing Risk", "Recent SEC Filing",
         "Reasons", "Status"
@@ -1107,9 +1247,15 @@ def save_to_excel(df):
         wb = load_workbook(TEMPLATE_FILE)
         ws = wb.active
 
-        for row in ws.iter_rows(min_row=2, max_row=1000, min_col=1, max_col=len(columns)):
+        # Clear old headers/data first so removed columns do not remain in Excel
+        clear_max_col = max(ws.max_column, len(columns) + 5)
+        for row in ws.iter_rows(min_row=1, max_row=1000, min_col=1, max_col=clear_max_col):
             for cell in row:
                 cell.value = None
+
+        # Update header row so Excel columns match the new PC/iPhone logic
+        for c_idx, col_name in enumerate(columns, start=1):
+            ws.cell(row=1, column=c_idx).value = col_name
 
         
 
@@ -1133,13 +1279,11 @@ def save_to_excel(df):
 
 
 
-# ============================================================
-# Cloud/iPhone Web App UI - V3 Clean Mobile Design
-# Deploy this file as app.py on Streamlit Community Cloud.
-# ============================================================
 
-import io
-import streamlit as st
+
+# ============================================================
+# Streamlit / iPhone Web App UI - synced with PC v12 logic
+# ============================================================
 
 st.set_page_config(
     page_title="Stock App Pro",
@@ -1148,174 +1292,76 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+APP_COLUMNS = [
+    "Ticker", "Price", "Score", "Signal", "Final Decision",
+    "Earnings Status", "Earnings Date",
+    "Market Condition", "Market Filter",
+    "Trend", "Setup", "Action",
+    "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
+    "Support", "Resistance",
+    "Entry Zone", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %",
+    "Entry Quality", "Aggressive Stop", "Safe Stop", "Stop Loss",
+    "Target 1", "Target 2", "Risk/Reward",
+    "Chart Confirmation", "Chart Adjustment", "Chart Note",
+    "News Sentiment", "News Risk", "Recent Catalyst",
+    "SEC Filing Risk", "Recent SEC Filing",
+    "Reasons", "Status", "Market Notes"
+]
+
+PREVIEW_COLUMNS = [
+    "Ticker", "Price", "Score", "Final Decision", "Entry Zone",
+    "Deep Safe Entry", "Aggressive Entry", "Stop Loss", "Target 1", "Target 2", "Risk/Reward"
+]
+
 st.markdown(
     """
     <style>
     :root {
-        --card-bg: #ffffff;
-        --soft-bg: #f6f8fb;
-        --text-main: #0f172a;
-        --text-muted: #64748b;
-        --border: #e5e7eb;
-        --green: #16a34a;
-        --yellow: #ca8a04;
-        --red: #dc2626;
-        --blue: #2563eb;
-        --purple: #7c3aed;
+        --bg:#f4f7fb; --card:#ffffff; --text:#0f172a; --muted:#64748b;
+        --line:#e2e8f0; --blue:#2563eb; --green:#16a34a; --yellow:#ca8a04; --red:#dc2626;
     }
-    .main .block-container {
-        padding-top: 1.1rem;
-        padding-bottom: 3rem;
-        max-width: 1120px;
-    }
-    section[data-testid="stSidebar"] .block-container {
-        padding-top: 1rem;
-    }
+    .main .block-container { padding-top: 1rem; padding-bottom: 3rem; max-width: 1180px; }
     .hero {
-        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 55%, #7c3aed 100%);
-        color: white;
-        border-radius: 24px;
-        padding: 22px 20px;
-        box-shadow: 0 12px 35px rgba(15, 23, 42, 0.22);
-        margin-bottom: 16px;
+        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 58%, #7c3aed 100%);
+        color:white; border-radius:24px; padding:22px 20px; margin-bottom:14px;
+        box-shadow:0 12px 30px rgba(15,23,42,.22);
     }
-    .hero h1 {
-        font-size: 30px;
-        margin: 0 0 6px 0;
-        line-height: 1.1;
-    }
-    .hero p {
-        margin: 0;
-        color: rgba(255,255,255,0.86);
-        font-size: 15px;
-    }
-    .mini-note {
-        background: #eff6ff;
-        color: #1e3a8a;
-        border: 1px solid #bfdbfe;
-        border-radius: 16px;
-        padding: 11px 14px;
-        margin: 8px 0 14px 0;
-        font-size: 14px;
-    }
-    .stock-card {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        padding: 16px;
-        margin-bottom: 14px;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-    }
-    .stock-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 10px;
-        margin-bottom: 12px;
-    }
-    .ticker-title {
-        font-size: 25px;
-        font-weight: 800;
-        color: var(--text-main);
-        margin: 0;
-        letter-spacing: -0.02em;
-    }
-    .price-line {
-        color: var(--text-muted);
-        font-size: 14px;
-        margin-top: 2px;
-    }
-    .badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 12px;
-        font-weight: 800;
-        white-space: nowrap;
-        text-align: center;
-    }
-    .badge-good { background: #dcfce7; color: #166534; }
-    .badge-watch { background: #fef3c7; color: #92400e; }
-    .badge-bad { background: #fee2e2; color: #991b1b; }
-    .badge-info { background: #dbeafe; color: #1e40af; }
-    .badge-neutral { background: #f1f5f9; color: #334155; }
-    .metric-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-        margin: 10px 0 12px 0;
-    }
-    .metric-box {
-        background: var(--soft-bg);
-        border-radius: 16px;
-        padding: 12px;
-        border: 1px solid #eef2f7;
-    }
-    .metric-label {
-        color: var(--text-muted);
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: .03em;
-        margin-bottom: 4px;
-    }
-    .metric-value {
-        color: var(--text-main);
-        font-size: 18px;
-        font-weight: 800;
-        line-height: 1.15;
-        word-break: break-word;
-    }
-    .action-box {
-        border-radius: 16px;
-        padding: 13px 14px;
-        background: #f8fafc;
-        border-left: 5px solid #2563eb;
-        color: #0f172a;
-        margin-top: 8px;
-        font-size: 14px;
-    }
-    .small-muted { color: var(--text-muted); font-size: 13px; }
-    .section-title {
-        font-size: 21px;
-        font-weight: 800;
-        margin: 16px 0 6px 0;
-        color: var(--text-main);
-    }
-    .pill-row { display:flex; flex-wrap:wrap; gap:8px; margin: 8px 0 12px 0; }
-    .pill {
-        display:inline-block;
-        padding:7px 11px;
-        border-radius:999px;
-        background:#f1f5f9;
-        color:#334155;
-        font-size:13px;
-        font-weight:700;
-    }
-    div.stButton > button {
-        border-radius: 16px;
-        min-height: 48px;
-        font-weight: 800;
-    }
-    div[data-testid="stTextInput"] input, textarea {
-        border-radius: 14px !important;
-    }
+    .hero h1 { font-size:30px; margin:0 0 6px 0; line-height:1.1; }
+    .hero p { margin:0; color:rgba(255,255,255,.86); font-size:15px; }
+    .mini-note { background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; border-radius:16px; padding:11px 14px; margin:8px 0 14px 0; font-size:14px; }
+    .section-title { font-size:21px; font-weight:800; margin:18px 0 8px 0; color:var(--text); }
+    .pill-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px 0; }
+    .pill { display:inline-block; padding:7px 11px; border-radius:999px; background:#f1f5f9; color:#334155; font-size:13px; font-weight:700; }
+    .stock-card { background:var(--card); border:1px solid var(--line); border-radius:22px; padding:16px; margin-bottom:14px; box-shadow:0 8px 24px rgba(15,23,42,.06); }
+    .stock-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:12px; }
+    .ticker-title { font-size:25px; font-weight:850; color:var(--text); margin:0; letter-spacing:-.02em; }
+    .price-line { color:var(--muted); font-size:14px; margin-top:2px; }
+    .badge { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:7px 11px; font-size:12px; font-weight:850; white-space:nowrap; text-align:center; }
+    .badge-good { background:#dcfce7; color:#166534; }
+    .badge-watch { background:#fef3c7; color:#92400e; }
+    .badge-bad { background:#fee2e2; color:#991b1b; }
+    .badge-info { background:#dbeafe; color:#1e40af; }
+    .badge-neutral { background:#f1f5f9; color:#334155; }
+    .metric-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px; margin:10px 0 12px 0; }
+    .metric-box { background:#f8fafc; border-radius:16px; padding:12px; border:1px solid #eef2f7; }
+    .metric-label { color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.03em; margin-bottom:4px; }
+    .metric-value { color:var(--text); font-size:18px; font-weight:850; line-height:1.15; word-break:break-word; }
+    .action-box { border-radius:16px; padding:13px 14px; background:#f8fafc; border-left:5px solid #2563eb; color:#0f172a; margin-top:8px; font-size:14px; }
+    .small-muted { color:var(--muted); font-size:13px; }
+    div.stButton > button { border-radius:16px; min-height:48px; font-weight:850; }
+    div[data-testid="stTextInput"] input, textarea { border-radius:14px !important; }
     @media (max-width: 640px) {
-        .main .block-container { padding-left: 0.9rem; padding-right: 0.9rem; }
-        .hero { border-radius: 20px; padding: 18px 16px; }
-        .hero h1 { font-size: 27px; }
-        .metric-grid { grid-template-columns: 1fr; }
-        .ticker-title { font-size: 23px; }
-        .stock-head { flex-direction: column; }
+        .main .block-container { padding-left:.85rem; padding-right:.85rem; }
+        .hero { border-radius:20px; padding:18px 16px; }
+        .hero h1 { font-size:27px; }
+        .metric-grid { grid-template-columns:1fr; }
+        .stock-head { flex-direction:column; }
+        .ticker-title { font-size:23px; }
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-# ---------- Helpers for web version ----------
 
 def parse_tickers(text):
     tickers = []
@@ -1328,31 +1374,12 @@ def parse_tickers(text):
 
 def dataframe_to_excel_bytes(df):
     output = io.BytesIO()
-    columns = [
-        "Ticker", "Price", "Score", "Signal", "Final Decision",
-        "Earnings Status", "Earnings Date", "Earnings Note",
-        "Market Condition", "Market Filter",
-        "Trend", "Setup", "Action",
-        "RSI", "RSI Status", "Momentum", "Volume Status",
-        "Support", "Resistance",
-        "Aggressive Entry", "Safe Entry", "Entry Distance %",
-        "Entry Quality",
-        "Aggressive Stop", "Safe Stop", "Stop Loss",
-        "Target 1", "Target 2", "Risk/Reward",
-        "Chart Confirmation", "Chart Adjustment", "Chart Note",
-        "Earnings Warning",
-        "News Sentiment", "News Risk", "Recent Catalyst",
-        "SEC Filing Risk", "Recent SEC Filing",
-        "Reasons", "Status", "Market Notes"
-    ]
-
-    for col in columns:
-        if col not in df.columns:
-            df[col] = ""
-
+    df2 = df.copy()
+    for col in APP_COLUMNS:
+        if col not in df2.columns:
+            df2[col] = ""
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df[columns].to_excel(writer, index=False, sheet_name="Analysis")
-
+        df2[APP_COLUMNS].to_excel(writer, index=False, sheet_name="Analysis")
     output.seek(0)
     return output.getvalue()
 
@@ -1363,11 +1390,11 @@ def load_default_text():
 
 def badge_class(decision):
     d = str(decision).upper()
-    if "WATCH TO ENTER" in d or "BUY" in d:
+    if "WATCH TO ENTER" in d or "BUY WATCH" in d:
         return "badge-good"
-    if "BREAKOUT" in d or "REVERSAL" in d or "PULLBACK" in d or "WAIT" in d:
+    if "BREAKOUT" in d or "REVERSAL" in d or "PULLBACK" in d or "WAIT" in d or "CAUTION" in d:
         return "badge-watch"
-    if "NO TRADE" in d or "AVOID" in d or "WEAK" in d or "RISK" in d:
+    if "NO TRADE" in d or "AVOID" in d or "WEAK" in d or "RISK" in d or "FALLING" in d:
         return "badge-bad"
     return "badge-neutral"
 
@@ -1404,13 +1431,15 @@ def render_stock_card(row):
     decision = row.get("Final Decision", "")
     price = safe_money(row.get("Price", ""))
     score = safe_value(row.get("Score", ""))
+    day_change = safe_value(row.get("Day Change %", ""), "%")
     action = row.get("Action", "")
     trend = row.get("Trend", "")
     setup = row.get("Setup", "")
     rsi = safe_value(row.get("RSI", ""))
     rr = safe_value(row.get("Risk/Reward", ""))
-    entry = row.get("Aggressive Entry", "")
-    safe_entry = row.get("Safe Entry", "")
+    entry = row.get("Entry Zone", "")
+    deep_entry = row.get("Deep Safe Entry", "")
+    aggressive_entry = row.get("Aggressive Entry", "")
     stop = safe_money(row.get("Stop Loss", ""))
     target1 = safe_money(row.get("Target 1", ""))
     target2 = safe_money(row.get("Target 2", ""))
@@ -1423,13 +1452,13 @@ def render_stock_card(row):
             <div class="stock-head">
                 <div>
                     <div class="ticker-title">{ticker}</div>
-                    <div class="price-line">Price {price} · Score {score}</div>
+                    <div class="price-line">Price {price} · Score {score} · Day {day_change}</div>
                 </div>
                 <span class="badge {badge_class(decision)}">{decision}</span>
             </div>
             <div class="metric-grid">
                 <div class="metric-box"><div class="metric-label">Entry Zone</div><div class="metric-value">{entry or '—'}</div></div>
-                <div class="metric-box"><div class="metric-label">Stop loss</div><div class="metric-value">{stop}</div></div>
+                <div class="metric-box"><div class="metric-label">Stop Loss</div><div class="metric-value">{stop}</div></div>
                 <div class="metric-box"><div class="metric-label">Target</div><div class="metric-value">{target1} / {target2}</div></div>
                 <div class="metric-box"><div class="metric-label">Risk / Reward</div><div class="metric-value">{rr}</div></div>
             </div>
@@ -1440,38 +1469,30 @@ def render_stock_card(row):
                 <span class="pill">Support: {support}</span>
                 <span class="pill">Resistance: {resistance}</span>
             </div>
-            <div class="action-box">
-            <b>Action:</b> {action or '—'}<br>
-            <span class="small-muted">Deep Safe Entry: {safe_entry or '—'}</span></br>
-            <span class="small-muted">Entry zone only. Check Final Decision before buying.</span>
+            <div class="action-box"><b>Action:</b> {action or '—'}<br>
+                <span class="small-muted">Aggressive Entry: {aggressive_entry or '—'}</span><br>
+                <span class="small-muted">Deep Safe Entry: {deep_entry or '—'}</span><br>
+                <span class="small-muted">Entry zone only. Check Final Decision and chart before buying.</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    reasons = row.get("Reasons", "")
-    catalyst = row.get("Recent Catalyst", "")
-    sec = row.get("Recent SEC Filing", "")
-    earnings = row.get("Earnings Warning", "")
-    earnings_status = row.get("Earnings Status", "")
-    earnings_date = row.get("Earnings Date", "")
-    earnings_note = row.get("Earnings Note", "")
-    chart_note = row.get("Chart Note", "")
-
-    with st.expander(f"Chi tiết {ticker}: lý do, news, SEC"):
-        if reasons:
+    with st.expander(f"Chi tiết {ticker}: lý do, news, SEC, earnings"):
+        earnings_status = row.get("Earnings Status", "")
+        earnings_date = row.get("Earnings Date", "")
+        if earnings_status or earnings_date:
+            st.write(f"**Earnings:** {earnings_status} | {earnings_date}")
+        if row.get("Chart Note", ""):
+            st.write(f"**Chart note:** {row.get('Chart Note', '')}")
+        if row.get("Recent Catalyst", ""):
+            st.write(f"**News:** {row.get('Recent Catalyst', '')}")
+        if row.get("Recent SEC Filing", ""):
+            st.write(f"**SEC:** {row.get('Recent SEC Filing', '')}")
+        if row.get("Reasons", ""):
             st.write("**Lý do phân tích:**")
-            st.write(reasons)
-        if earnings:
-            st.write(f"**Earnings:** {earnings}")
-        if earnings_status or earnings_date or earnings_note:
-            st.write(f"**Earnings Report:** {earnings_status} | {earnings_date} | {earnings_note}")
-        if chart_note:
-            st.write(f"**Chart note:** {chart_note}")
-        if catalyst:
-            st.write(f"**News:** {catalyst}")
-        if sec:
-            st.write(f"**SEC:** {sec}")
+            st.write(row.get("Reasons", ""))
 
 
 def run_analysis_for_tickers(analysis_tickers):
@@ -1484,11 +1505,7 @@ def run_analysis_for_tickers(analysis_tickers):
 
     for i, ticker in enumerate(analysis_tickers, start=1):
         status.info(f"Đang phân tích {ticker}... ({i}/{len(analysis_tickers)})")
-        result = analyze_stock(
-            ticker,
-            market_condition=market_condition,
-            chart_confirmations=chart_confirmations
-        )
+        result = analyze_stock(ticker, market_condition=market_condition, chart_confirmations=chart_confirmations)
         result["Market Notes"] = market_notes
         results.append(result)
         progress.progress(i / len(analysis_tickers))
@@ -1501,13 +1518,11 @@ def run_analysis_for_tickers(analysis_tickers):
     return market_condition, market_notes, df
 
 
-# ---------- Header ----------
-
 st.markdown(
     """
     <div class="hero">
         <h1>📈 Stock App Pro</h1>
-        <p>Phân tích swing trade trên iPhone: điểm vào, stop loss, target, risk/reward, market filter, news và SEC.</p>
+        <p>Bản iPhone đồng bộ logic PC v12: multi-source news, earnings backup, SEC filter thông minh, ETF filter, Entry Zone và falling knife.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1516,38 +1531,25 @@ st.markdown(
 st.markdown(
     """
     <div class="mini-note">
-        Cách dùng nhanh: nhập mã ở <b>Quick Analyze</b> → bấm <b>RUN QUICK ANALYSIS</b>. Không cần sửa watchlist chính.
+        App dùng để <b>lọc mã + cảnh báo rủi ro + gợi ý vùng giá</b>. Trước khi mua, luôn mở chart xác nhận support, nến và volume.
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-# ---------- Session defaults ----------
 
 if "ticker_text" not in st.session_state:
     st.session_state.ticker_text = load_default_text()
 if "quick_text" not in st.session_state:
     st.session_state.quick_text = ""
 
-# ---------- Main tabs ----------
-
 tab_quick, tab_watchlist, tab_chart, tab_guide = st.tabs([
-    "⚡ Quick Analyze",
-    "📋 Watchlist",
-    "📌 Chart Signal",
-    "📱 iPhone Guide",
+    "⚡ Quick Analyze", "📋 Watchlist", "📌 Chart Signal", "📱 iPhone Guide"
 ])
 
 with tab_quick:
     st.markdown('<div class="section-title">Phân tích nhanh mã mới</div>', unsafe_allow_html=True)
     st.caption("Gõ 1 mã hoặc nhiều mã. Ví dụ: HOOD hoặc NVDA, TSLA, SOUN")
-    quick_text = st.text_input(
-        "Nhập ticker",
-        value=st.session_state.quick_text,
-        placeholder="HOOD, NVDA, TSLA",
-        key="quick_input",
-        label_visibility="collapsed"
-    )
+    quick_text = st.text_input("Nhập ticker", value=st.session_state.quick_text, placeholder="HOOD, NVDA, TSLA", key="quick_input", label_visibility="collapsed")
     st.session_state.quick_text = quick_text
     quick_tickers = parse_tickers(quick_text)
 
@@ -1569,39 +1571,24 @@ with tab_quick:
         else:
             try:
                 market_condition, market_notes, df = run_analysis_for_tickers(quick_tickers)
-                st.markdown(
-                    f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>", unsafe_allow_html=True)
                 st.caption(f"Market notes: {market_notes}")
-
                 st.markdown('<div class="section-title">Kết quả</div>', unsafe_allow_html=True)
                 for _, row in df.iterrows():
                     render_stock_card(row)
-
-                with st.expander("📊 Bảng chi tiết"):
+                with st.expander("📊 Bảng preview"):
+                    cols = [c for c in PREVIEW_COLUMNS if c in df.columns]
+                    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+                with st.expander("📋 Bảng chi tiết đầy đủ"):
                     st.dataframe(df, use_container_width=True, hide_index=True)
-
-                excel_bytes = dataframe_to_excel_bytes(df)
-                st.download_button(
-                    label="⬇️ Download Excel",
-                    data=excel_bytes,
-                    file_name="quick_analysis.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+                st.download_button("⬇️ Download Excel", data=dataframe_to_excel_bytes(df), file_name="quick_analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
 with tab_watchlist:
     st.markdown('<div class="section-title">Watchlist chính</div>', unsafe_allow_html=True)
     st.caption("Danh sách này dùng cho những mã bạn theo dõi thường xuyên.")
-    ticker_text = st.text_area(
-        "Watchlist",
-        value=st.session_state.ticker_text,
-        height=220,
-        placeholder="ENVX\nSOUN\nWULF\nPATH",
-    )
+    ticker_text = st.text_area("Watchlist", value=st.session_state.ticker_text, height=220, placeholder="ENVX\nSOUN\nWULF\nPATH")
     tickers = parse_tickers(ticker_text)
 
     c1, c2, c3 = st.columns([1, 1, 2])
@@ -1629,27 +1616,17 @@ with tab_watchlist:
         else:
             try:
                 market_condition, market_notes, df = run_analysis_for_tickers(tickers)
-                st.markdown(
-                    f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"<span class='badge {market_badge_class(market_condition)}'>Market: {market_condition}</span>", unsafe_allow_html=True)
                 st.caption(f"Market notes: {market_notes}")
-
                 st.markdown('<div class="section-title">Kết quả watchlist</div>', unsafe_allow_html=True)
                 for _, row in df.iterrows():
                     render_stock_card(row)
-
-                with st.expander("📊 Bảng chi tiết"):
+                with st.expander("📊 Bảng preview"):
+                    cols = [c for c in PREVIEW_COLUMNS if c in df.columns]
+                    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+                with st.expander("📋 Bảng chi tiết đầy đủ"):
                     st.dataframe(df, use_container_width=True, hide_index=True)
-
-                excel_bytes = dataframe_to_excel_bytes(df)
-                st.download_button(
-                    label="⬇️ Download Excel",
-                    data=excel_bytes,
-                    file_name="watchlist_analysis.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+                st.download_button("⬇️ Download Excel", data=dataframe_to_excel_bytes(df), file_name="watchlist_analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             except Exception as e:
                 st.error(f"Lỗi: {e}")
 
@@ -1657,18 +1634,7 @@ with tab_chart:
     st.markdown('<div class="section-title">Chart Confirmation thủ công</div>', unsafe_allow_html=True)
     st.caption("Dùng khi bạn tự xem chart và muốn app cộng/trừ điểm theo nhận định của bạn.")
     chart_ticker = st.text_input("Ticker chart", value="", placeholder="Ví dụ: PATH").upper().strip()
-    chart_confirmation = st.selectbox(
-        "Chart signal",
-        [
-            "Neutral",
-            "Bullish Breakout",
-            "Pullback Holding",
-            "Reversal Setup",
-            "Near Resistance",
-            "Weak / Breakdown"
-        ],
-        index=0
-    )
+    chart_confirmation = st.selectbox("Chart signal", ["Neutral", "Bullish Breakout", "Pullback Holding", "Reversal Setup", "Near Resistance", "Weak / Breakdown"], index=0)
     chart_note = st.text_input("Note", value="", placeholder="Ví dụ: giữ EMA21, gần resistance...")
 
     c1, c2 = st.columns(2)
@@ -1678,10 +1644,7 @@ with tab_chart:
                 st.warning("Bạn chưa nhập ticker.")
             else:
                 confirmations = load_chart_confirmations()
-                confirmations[chart_ticker] = {
-                    "confirmation": chart_confirmation,
-                    "note": chart_note
-                }
+                confirmations[chart_ticker] = {"confirmation": chart_confirmation, "note": chart_note}
                 save_chart_confirmations(confirmations)
                 st.success(f"Đã lưu chart signal cho {chart_ticker}.")
     with c2:
@@ -1697,14 +1660,7 @@ with tab_chart:
     confirmations = load_chart_confirmations()
     if confirmations:
         st.markdown('<div class="section-title">Chart signals đã lưu</div>', unsafe_allow_html=True)
-        st.dataframe(
-            pd.DataFrame([
-                {"Ticker": k, "Signal": v.get("confirmation", ""), "Note": v.get("note", "")}
-                for k, v in confirmations.items()
-            ]),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(pd.DataFrame([{"Ticker": k, "Signal": v.get("confirmation", ""), "Note": v.get("note", "")} for k, v in confirmations.items()]), use_container_width=True, hide_index=True)
 
 with tab_guide:
     st.markdown('<div class="section-title">Cài như app trên iPhone</div>', unsafe_allow_html=True)
@@ -1715,7 +1671,7 @@ with tab_guide:
         3. Chọn **Add to Home Screen**.  
         4. Đặt tên **Stock App Pro** rồi bấm **Add**.  
 
-        Từ lần sau bạn chỉ cần bấm icon ngoài màn hình iPhone. Không cần CMD, không cần ngrok, không cần máy tính ở nhà bật.
+        Bản này đã đồng bộ logic với PC: ETF filter, earnings backup, SEC filter thông minh, news đa nguồn, Entry Zone và Falling Knife.
         """
     )
-    st.info("Gợi ý: dùng tab Quick Analyze khi bạn muốn kiểm tra nhanh một mã mới như HOOD, NVDA, TSLA.")
+    st.info("Gợi ý: dùng tab Quick Analyze khi bạn muốn kiểm tra nhanh một mã mới. Dùng PC để phân tích sâu và lưu Excel.")
