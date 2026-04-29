@@ -3,6 +3,7 @@ import json
 import time
 import re
 import base64
+import html
 from urllib.parse import quote_plus
 import xml.etree.ElementTree as ET
 
@@ -1330,8 +1331,23 @@ st.markdown(
     }
     .hero h1 { font-size:30px; margin:0 0 6px 0; line-height:1.1; }
     .hero p { margin:0; color:rgba(255,255,255,.86); font-size:15px; }
-    .mini-note { background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; border-radius:16px; padding:11px 14px; margin:8px 0 14px 0; font-size:14px; }
-    .section-title { font-size:21px; font-weight:800; margin:18px 0 8px 0; color:var(--text); }
+    .mini-note { background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; border-radius:16px; padding:10px 13px; margin:8px 0 12px 0; font-size:14px; }
+    .section-title { font-size:21px; font-weight:800; margin:16px 0 8px 0; color:var(--text); }
+    .panel-card { background:var(--card); border:1px solid var(--line); border-radius:20px; padding:14px 15px; box-shadow:0 8px 22px rgba(15,23,42,.05); margin:8px 0 12px 0; }
+    .panel-title { font-size:16px; font-weight:850; color:var(--text); margin:0 0 8px 0; display:flex; align-items:center; gap:7px; }
+    .summary-text { color:#1f2937; font-size:15px; line-height:1.6; }
+    .bullet-list { margin:0; padding-left:18px; }
+    .bullet-list li { margin:0 0 7px 0; color:#1f2937; line-height:1.5; }
+    .level-line { margin:0 0 7px 0; color:#111827; line-height:1.5; }
+    .level-line b { color:#0f172a; }
+    .hint-box { background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:14px; padding:10px 12px; margin:8px 0 12px 0; font-size:14px; }
+    .ai-hero-card { background:linear-gradient(135deg,#ffffff 0%,#f8fbff 100%); border:1px solid #dbe7fb; border-radius:22px; padding:14px 16px; box-shadow:0 10px 26px rgba(15,23,42,.06); margin:8px 0 10px 0; }
+    .ai-main-reason { font-size:16px; line-height:1.6; color:#111827; margin-top:8px; }
+    .ai-card-accent-blue { border-left:5px solid #2563eb; }
+    .ai-card-accent-orange { border-left:5px solid #f97316; }
+    .ai-card-accent-green { border-left:5px solid #16a34a; }
+    .ai-card-accent-red { border-left:5px solid #dc2626; }
+    .compact-section { margin-top:4px; }
     .pill-row { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 12px 0; }
     .pill { display:inline-block; padding:7px 11px; border-radius:999px; background:#f1f5f9; color:#334155; font-size:13px; font-weight:700; }
     .stock-card { background:var(--card); border:1px solid var(--line); border-radius:22px; padding:16px; margin-bottom:14px; box-shadow:0 8px 24px rgba(15,23,42,.06); }
@@ -1357,6 +1373,7 @@ st.markdown(
         .hero { border-radius:20px; padding:18px 16px; }
         .hero h1 { font-size:27px; }
         .metric-grid { grid-template-columns:1fr; }
+        .panel-card { padding:13px 13px; border-radius:18px; }
         .stock-head { flex-direction:column; }
         .ticker-title { font-size:23px; }
     }
@@ -1700,50 +1717,85 @@ def normalize_ai_result(result, app_data):
     return result
 
 
+
 def render_ai_result(result):
+    def esc(v):
+        return html.escape(str(v or "—"))
+
+    def make_list(items):
+        items = items or []
+        if not items:
+            return '<ul class="bullet-list"><li>—</li></ul>'
+        li = ''.join(f'<li>{esc(x)}</li>' for x in items)
+        return f'<ul class="bullet-list">{li}</ul>'
+
     decision = safe_value(result.get("ai_final_decision", "—"))
     confidence = safe_value(result.get("confidence", "—"))
     review = safe_value(result.get("app_decision_review", "—"))
     chart_conf = safe_value(result.get("chart_confirmation", "—"))
     trade_status = safe_value(result.get("trade_status", "—"))
+
     st.markdown(
-        f'<span class="badge {badge_class(decision)}">AI kết luận: {decision}</span> '
-        f'<span class="badge badge-info">Độ tin cậy: {confidence}</span> '
-        f'<span class="badge badge-neutral">So với app: {review}</span> '
-        f'<span class="badge badge-neutral">Chart: {chart_conf}</span> '
-        f'<span class="badge badge-neutral">Trạng thái: {trade_status}</span>',
+        f'<div class="ai-hero-card">'
+        f'<div class="pill-row">'
+        f'<span class="badge {badge_class(decision)}">🤖 AI kết luận: {esc(decision)}</span>'
+        f'<span class="badge badge-info">Độ tin cậy: {esc(confidence)}</span>'
+        f'<span class="badge badge-neutral">So với app: {esc(review)}</span>'
+        f'<span class="badge badge-neutral">Chart: {esc(chart_conf)}</span>'
+        f'<span class="badge badge-neutral">Trạng thái: {esc(trade_status)}</span>'
+        f'</div>'
+        f'<div class="ai-main-reason">{esc(result.get("main_reason", ""))}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
-    if str(trade_status).lower().startswith("reference"):
-        st.info("Các mức Entry / Stop / Target bên dưới là vùng tham khảo để theo dõi. Đây chưa phải lệnh mua vì AI chưa thấy chart xác nhận.")
-    st.markdown('<div class="section-title">Kế hoạch hành động AI</div>', unsafe_allow_html=True)
-    st.write(result.get("main_reason", ""))
 
-    c1, c2 = st.columns(2)
+    if str(trade_status).lower().startswith("reference"):
+        st.markdown(
+            '<div class="hint-box">📌 Các mức Entry / Stop / Target bên dưới chỉ là vùng tham khảo để theo dõi. Chưa phải lệnh mua vì AI chưa thấy chart xác nhận.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="section-title compact-section">Kế hoạch hành động AI</div>', unsafe_allow_html=True)
+
+    left_html = (
+        '<div class="panel-card ai-card-accent-blue">'
+        '<div class="panel-title">🎯 Vùng giá tham khảo</div>'
+        f'<div class="level-line"><b>Entry:</b> {esc(result.get("final_entry_zone", "—"))}</div>'
+        f'<div class="level-line"><b>Stop:</b> {esc(result.get("final_stop_loss", "—"))}</div>'
+        f'<div class="level-line"><b>Target 1:</b> {esc(result.get("final_target_1", "—"))}</div>'
+        f'<div class="level-line"><b>Target 2:</b> {esc(result.get("final_target_2", "—"))}</div>'
+        f'<div class="level-line"><b>Mất hiệu lực nếu:</b> {esc(result.get("invalid_if", "—"))}</div>'
+        '</div>'
+    )
+    right_html = (
+        '<div class="panel-card ai-card-accent-green">'
+        '<div class="panel-title">🧭 Tóm tắt</div>'
+        f'<div class="summary-text">{esc(result.get("summary_vi", "—"))}</div>'
+        '</div>'
+    )
+
+    c1, c2 = st.columns([1.05, 0.95])
     with c1:
-        st.markdown("**Vùng giá tham khảo**")
-        st.write(f"**Entry:** {result.get('final_entry_zone', '—')}")
-        st.write(f"**Stop:** {result.get('final_stop_loss', '—')}")
-        st.write(f"**Target 1:** {result.get('final_target_1', '—')}")
-        st.write(f"**Target 2:** {result.get('final_target_2', '—')}")
-        st.write(f"**Mất hiệu lực nếu:** {result.get('invalid_if', '—')}")
+        st.markdown(left_html, unsafe_allow_html=True)
     with c2:
-        st.markdown("**Tóm tắt**")
-        st.write(result.get("summary_vi", "—"))
+        st.markdown(right_html, unsafe_allow_html=True)
 
     c3, c4, c5 = st.columns(3)
     with c3:
-        st.markdown("**Điểm chính**")
-        for x in result.get("key_points", []) or []:
-            st.write(f"- {x}")
+        st.markdown(
+            f'<div class="panel-card ai-card-accent-blue"><div class="panel-title">✅ Điểm chính</div>{make_list(result.get("key_points", []))}</div>',
+            unsafe_allow_html=True,
+        )
     with c4:
-        st.markdown("**Cảnh báo rủi ro**")
-        for x in result.get("risk_warnings", []) or []:
-            st.write(f"- {x}")
+        st.markdown(
+            f'<div class="panel-card ai-card-accent-red"><div class="panel-title">⚠️ Cảnh báo rủi ro</div>{make_list(result.get("risk_warnings", []))}</div>',
+            unsafe_allow_html=True,
+        )
     with c5:
-        st.markdown("**Bước tiếp theo**")
-        for x in result.get("action_plan", []) or []:
-            st.write(f"- {x}")
+        st.markdown(
+            f'<div class="panel-card ai-card-accent-orange"><div class="panel-title">➡️ Bước tiếp theo</div>{make_list(result.get("action_plan", []))}</div>',
+            unsafe_allow_html=True,
+        )
 
 
 st.markdown(
@@ -1987,13 +2039,6 @@ with tab_ai:
     if st.session_state.ai_result:
         st.markdown('<div class="section-title">Tầng 2: AI Final Decision</div>', unsafe_allow_html=True)
         render_ai_result(st.session_state.ai_result)
-        st.download_button(
-            "⬇️ Download AI Analysis JSON",
-            data=json.dumps(st.session_state.ai_result, ensure_ascii=False, indent=2).encode("utf-8"),
-            file_name=f"ai_final_analysis_{(ai_ticker or 'ticker')}.json",
-            mime="application/json",
-            use_container_width=True,
-        )
 
 
 with tab_guide:
