@@ -1366,6 +1366,18 @@ st.markdown(
     .metric-value { color:var(--text); font-size:18px; font-weight:850; line-height:1.15; word-break:break-word; }
     .action-box { border-radius:16px; padding:13px 14px; background:#f8fafc; border-left:5px solid #2563eb; color:#0f172a; margin-top:8px; font-size:14px; }
     .small-muted { color:var(--muted); font-size:13px; }
+
+    .chart-preview-fit { margin:10px 0 12px 0; padding:8px; background:#ffffff; border:1px solid var(--line); border-radius:18px; box-shadow:0 8px 22px rgba(15,23,42,.04); }
+    .chart-preview-fit img { display:block; width:100%; height:auto; max-height:68vh; object-fit:contain; margin:0 auto; border-radius:14px; }
+    .preview-caption { color:var(--muted); font-size:13px; text-align:center; margin-top:6px; }
+    @media (orientation: landscape) and (max-height: 520px) {
+        .main .block-container { padding-top:.35rem; }
+        .hero { padding:12px 14px; margin-bottom:8px; }
+        .hero h1 { font-size:22px; }
+        .hero p, .mini-note { font-size:12px; }
+        .chart-preview-fit img { max-height:74vh; width:auto; max-width:100%; }
+        .section-title { font-size:18px; margin:10px 0 6px 0; }
+    }
     div.stButton > button { border-radius:16px; min-height:48px; font-weight:850; }
     div[data-testid="stTextInput"] input, textarea { border-radius:14px !important; }
     @media (max-width: 640px) {
@@ -1798,6 +1810,64 @@ def render_ai_result(result):
         )
 
 
+def render_uploaded_chart_preview(uploaded_file):
+    """Show chart image in a responsive container that fits better on iPhone landscape."""
+    if uploaded_file is None:
+        return
+    mime = uploaded_file.type or "image/png"
+    b64 = base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
+    html_block = (
+        f'<div class="chart-preview-fit">'
+        f'<img src="data:{mime};base64,{b64}" alt="Uploaded chart" />'
+        f'<div class="preview-caption">Uploaded chart - tự fit theo màn hình, nhất là khi xoay ngang iPhone</div>'
+        f'</div>'
+    )
+    st.markdown(html_block, unsafe_allow_html=True)
+
+
+def build_share_text(result, app_data=None):
+    app_data = app_data or {}
+    ticker = app_data.get("Ticker", "")
+    price = app_data.get("Price", "")
+    lines = []
+    title = f"📈 AI Final Analysis {ticker}".strip()
+    lines.append(title)
+    if price:
+        lines.append(f"Giá hiện tại: {price}")
+    lines.append(f"AI kết luận: {result.get('ai_final_decision', '—')}")
+    lines.append(f"Độ tin cậy: {result.get('confidence', '—')}")
+    lines.append(f"Chart: {result.get('chart_confirmation', '—')}")
+    lines.append(f"Trạng thái: {result.get('trade_status', '—')}")
+    lines.append("")
+    lines.append("Lý do chính:")
+    lines.append(str(result.get("main_reason", "—")))
+    lines.append("")
+    lines.append("Vùng giá tham khảo:")
+    lines.append(f"Entry: {result.get('final_entry_zone', '—')}")
+    lines.append(f"Stop: {result.get('final_stop_loss', '—')}")
+    lines.append(f"Target 1: {result.get('final_target_1', '—')}")
+    lines.append(f"Target 2: {result.get('final_target_2', '—')}")
+    lines.append(f"Mất hiệu lực nếu: {result.get('invalid_if', '—')}")
+    lines.append("")
+    lines.append("Tóm tắt:")
+    lines.append(str(result.get("summary_vi", "—")))
+    lines.append("")
+    lines.append("Điểm chính:")
+    for item in result.get("key_points", []) or []:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("Cảnh báo rủi ro:")
+    for item in result.get("risk_warnings", []) or []:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("Bước tiếp theo:")
+    for item in result.get("action_plan", []) or []:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("Ghi chú: Đây là phân tích tham khảo, không phải khuyến nghị tài chính.")
+    return "\n".join(lines)
+
+
 st.markdown(
     """
     <div class="hero">
@@ -1973,7 +2043,7 @@ with tab_ai:
         run_ai_layer = st.button("2️⃣ Run AI Final Analysis", use_container_width=True)
 
     if uploaded_chart is not None:
-        st.image(uploaded_chart, caption="Uploaded chart", use_container_width=True)
+        render_uploaded_chart_preview(uploaded_chart)
 
     if run_app_layer:
         if not ai_ticker:
@@ -2039,6 +2109,14 @@ with tab_ai:
     if st.session_state.ai_result:
         st.markdown('<div class="section-title">Tầng 2: AI Final Decision</div>', unsafe_allow_html=True)
         render_ai_result(st.session_state.ai_result)
+        with st.expander("📤 Nội dung chia sẻ cho bạn bè", expanded=False):
+            st.caption("Copy nội dung bên dưới rồi gửi qua text, Zalo, Messenger hoặc email.")
+            st.text_area(
+                "Share text",
+                value=build_share_text(st.session_state.ai_result, st.session_state.ai_app_data),
+                height=280,
+                label_visibility="collapsed",
+            )
 
 
 with tab_guide:
