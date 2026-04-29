@@ -2,6 +2,7 @@ import requests
 import json
 import time
 import re
+import base64
 from urllib.parse import quote_plus
 import xml.etree.ElementTree as ET
 
@@ -14,6 +15,7 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import io
+from openai import OpenAI
 
 try:
     from openpyxl import load_workbook
@@ -1282,11 +1284,11 @@ def save_to_excel(df):
 
 
 # ============================================================
-# Streamlit / iPhone Web App UI - synced with PC v12 logic
+# Streamlit / iPhone Web App UI - Stock App Pro AI two-layer logic
 # ============================================================
 
 st.set_page_config(
-    page_title="Stock App Pro",
+    page_title="Stock App Pro AI",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -1518,11 +1520,164 @@ def run_analysis_for_tickers(analysis_tickers):
     return market_condition, market_notes, df
 
 
+def get_openai_api_key():
+    try:
+        key = st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        key = ""
+    if not key:
+        key = st.session_state.get("openai_api_key", "")
+    return str(key).strip()
+
+
+def compact_app_data(row, market_notes=""):
+    keys = [
+        "Ticker", "Price", "Score", "Signal", "Final Decision",
+        "Earnings Status", "Earnings Date", "Market Condition", "Market Filter",
+        "Trend", "Setup", "Action", "RSI", "Day Change %", "RSI Status",
+        "Momentum", "Volume Status", "Support", "Resistance", "Entry Zone",
+        "Deep Safe Entry", "Aggressive Entry", "Entry Distance %", "Entry Quality",
+        "Aggressive Stop", "Safe Stop", "Stop Loss", "Target 1", "Target 2",
+        "Risk/Reward", "Chart Confirmation", "Chart Adjustment", "Chart Note",
+        "News Sentiment", "News Risk", "Recent Catalyst", "SEC Filing Risk",
+        "Recent SEC Filing", "Reasons", "Status"
+    ]
+    data = {}
+    for k in keys:
+        v = row.get(k, "")
+        try:
+            if pd.isna(v):
+                v = ""
+        except Exception:
+            pass
+        data[k] = str(v)
+    data["Market Notes"] = market_notes
+    return data
+
+
+AI_FINAL_SCHEMA = {
+    "ai_final_decision": "WAIT / NO TRADE / WATCH TO ENTER / BREAKOUT WATCH / PULLBACK WATCH / REVERSAL WATCH / CAUTION",
+    "confidence": "High / Medium / Low",
+    "app_decision_review": "Agree / More cautious / More bullish / Mixed",
+    "chart_confirmation": "Confirmed / Not confirmed / Weak / Unclear",
+    "main_reason": "Short main reason",
+    "key_points": ["point 1", "point 2", "point 3"],
+    "risk_warnings": ["risk 1", "risk 2"],
+    "action_plan": ["step 1", "step 2", "step 3"],
+    "final_entry_zone": "price zone or Wait",
+    "final_stop_loss": "price or N/A",
+    "final_target_1": "price or N/A",
+    "final_target_2": "price or N/A",
+    "invalid_if": "condition that cancels the setup",
+    "summary_vi": "Vietnamese practical summary"
+}
+
+
+def run_ai_final_analysis(app_data, image_bytes, mime_type, user_context, trading_style, api_key):
+    client = OpenAI(api_key=api_key)
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    system_prompt = """
+You are the final analyst layer for a swing-trading stock app.
+The app has already collected real data and calculated technical/risk levels.
+Your job is NOT to replace the app calculations. Your job is to:
+1) read the uploaded chart image,
+2) compare the chart to the app data,
+3) evaluate whether the app's Entry Zone / Stop / Targets make sense,
+4) incorporate app-collected news, SEC, earnings, market condition, ETF filter, and falling-knife risk,
+5) produce one practical final decision.
+
+Important rules:
+- Use only the app data, chart image, and user context provided.
+- Do not invent fresh news or unseen fundamentals.
+- If chart quality is poor, lower confidence.
+- If app data says earnings or SEC risk is high, be conservative.
+- If price is near support but the chart shows a red candle/falling knife/no confirmation, prefer WAIT or NO TRADE.
+- If app data is bullish but chart shows rejection at resistance, prefer WAIT.
+- If chart confirms support hold, higher low, breakout, or pullback holding, you may upgrade to WATCH TO ENTER.
+- Always give a practical action plan.
+- Return valid JSON only with keys matching the provided schema.
+"""
+
+    user_prompt = f"""
+Trading style: {trading_style}
+User extra context: {user_context or 'None'}
+
+APP DATA ENGINE OUTPUT:
+{json.dumps(app_data, ensure_ascii=False, indent=2)}
+
+Return JSON only using this schema:
+{json.dumps(AI_FINAL_SCHEMA, ensure_ascii=False, indent=2)}
+"""
+
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=[
+            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": user_prompt},
+                    {"type": "input_image", "image_url": f"data:{mime_type};base64,{b64}"},
+                ],
+            },
+        ],
+    )
+    raw = response.output_text.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(cleaned)
+
+
+def render_ai_result(result):
+    decision = safe_value(result.get("ai_final_decision", "—"))
+    confidence = safe_value(result.get("confidence", "—"))
+    review = safe_value(result.get("app_decision_review", "—"))
+    chart_conf = safe_value(result.get("chart_confirmation", "—"))
+    st.markdown(
+        f'<span class="badge {badge_class(decision)}">AI Final: {decision}</span> '
+        f'<span class="badge badge-info">Confidence: {confidence}</span> '
+        f'<span class="badge badge-neutral">App Review: {review}</span> '
+        f'<span class="badge badge-neutral">Chart: {chart_conf}</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="section-title">AI Action Plan</div>', unsafe_allow_html=True)
+    st.write(result.get("main_reason", ""))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Final levels**")
+        st.write(f"**Entry:** {result.get('final_entry_zone', '—')}")
+        st.write(f"**Stop:** {result.get('final_stop_loss', '—')}")
+        st.write(f"**Target 1:** {result.get('final_target_1', '—')}")
+        st.write(f"**Target 2:** {result.get('final_target_2', '—')}")
+        st.write(f"**Invalid if:** {result.get('invalid_if', '—')}")
+    with c2:
+        st.markdown("**Summary**")
+        st.write(result.get("summary_vi", "—"))
+
+    c3, c4, c5 = st.columns(3)
+    with c3:
+        st.markdown("**Key points**")
+        for x in result.get("key_points", []) or []:
+            st.write(f"- {x}")
+    with c4:
+        st.markdown("**Risk warnings**")
+        for x in result.get("risk_warnings", []) or []:
+            st.write(f"- {x}")
+    with c5:
+        st.markdown("**Next steps**")
+        for x in result.get("action_plan", []) or []:
+            st.write(f"- {x}")
+
+
 st.markdown(
     """
     <div class="hero">
-        <h1>📈 Stock App Pro</h1>
-        <p>Bản iPhone đồng bộ logic PC v12: multi-source news, earnings backup, SEC filter thông minh, ETF filter, Entry Zone và falling knife.</p>
+        <h1>📈 Stock App Pro AI</h1>
+        <p>2 tầng phân tích: App Data Engine tính dữ liệu thật, OpenAI đọc chart upload và đưa ra AI Final Decision.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1531,7 +1686,7 @@ st.markdown(
 st.markdown(
     """
     <div class="mini-note">
-        App dùng để <b>lọc mã + cảnh báo rủi ro + gợi ý vùng giá</b>. Trước khi mua, luôn mở chart xác nhận support, nến và volume.
+        Tầng 1: app lọc mã + cảnh báo rủi ro + gợi ý vùng giá. Tầng 2: upload chart để OpenAI tổng hợp và cho quyết định cuối.
     </div>
     """,
     unsafe_allow_html=True,
@@ -1541,9 +1696,15 @@ if "ticker_text" not in st.session_state:
     st.session_state.ticker_text = load_default_text()
 if "quick_text" not in st.session_state:
     st.session_state.quick_text = ""
+if "ai_result" not in st.session_state:
+    st.session_state.ai_result = None
+if "ai_app_data" not in st.session_state:
+    st.session_state.ai_app_data = None
+if "openai_api_key" not in st.session_state:
+    st.session_state.openai_api_key = ""
 
-tab_quick, tab_watchlist, tab_chart, tab_guide = st.tabs([
-    "⚡ Quick Analyze", "📋 Watchlist", "📌 Chart Signal", "📱 iPhone Guide"
+tab_quick, tab_watchlist, tab_chart, tab_ai, tab_guide = st.tabs([
+    "⚡ Quick Analyze", "📋 Watchlist", "📌 Chart Signal", "🤖 AI Final Analysis", "📱 iPhone Guide"
 ])
 
 with tab_quick:
@@ -1662,6 +1823,107 @@ with tab_chart:
         st.markdown('<div class="section-title">Chart signals đã lưu</div>', unsafe_allow_html=True)
         st.dataframe(pd.DataFrame([{"Ticker": k, "Signal": v.get("confirmation", ""), "Note": v.get("note", "")} for k, v in confirmations.items()]), use_container_width=True, hide_index=True)
 
+with tab_ai:
+    st.markdown('<div class="section-title">AI Final Analysis - 2 tầng</div>', unsafe_allow_html=True)
+    st.caption("Tầng 1: app tự lấy dữ liệu và tính toán. Tầng 2: OpenAI đọc chart upload + dữ liệu app để đưa quyết định cuối cùng.")
+
+    with st.expander("API key", expanded=False):
+        st.write("Nếu bạn đã lưu OPENAI_API_KEY trong Streamlit Secrets thì không cần nhập lại ở đây.")
+        st.session_state.openai_api_key = st.text_input(
+            "OpenAI API Key",
+            value=st.session_state.openai_api_key,
+            type="password",
+            placeholder="sk-...",
+        )
+
+    ai_ticker = st.text_input("Ticker cần phân tích AI", placeholder="VD: CIFR, KTOS, SOUN").upper().strip()
+    trading_style = st.selectbox("Trading style", ["Swing trade", "Day trade", "Position trade", "Conservative swing", "Aggressive breakout"], index=0)
+    uploaded_chart = st.file_uploader("Upload chart screenshot", type=["png", "jpg", "jpeg", "webp"])
+    user_context = st.text_area("Context thêm nếu có", placeholder="VD: Tôi đang muốn vào swing 1-4 tuần, chờ pullback hoặc breakout xác nhận...", height=100)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        run_app_layer = st.button("1️⃣ Run App Data Engine", type="primary", use_container_width=True)
+    with c2:
+        run_ai_layer = st.button("2️⃣ Run AI Final Analysis", use_container_width=True)
+
+    if uploaded_chart is not None:
+        st.image(uploaded_chart, caption="Uploaded chart", use_container_width=True)
+
+    if run_app_layer:
+        if not ai_ticker:
+            st.error("Bạn chưa nhập ticker.")
+        else:
+            try:
+                with st.spinner("Đang chạy Tầng 1: App Data Engine..."):
+                    market_condition, market_notes = get_market_condition()
+                    chart_confirmations = load_chart_confirmations()
+                    row = analyze_stock(ai_ticker, market_condition=market_condition, chart_confirmations=chart_confirmations)
+                    row["Market Notes"] = market_notes
+                    st.session_state.ai_app_data = compact_app_data(row, market_notes=market_notes)
+                    st.session_state.ai_result = None
+                st.success("Đã chạy xong Tầng 1. Kiểm tra dữ liệu bên dưới, rồi upload chart và bấm AI Final Analysis.")
+            except Exception as e:
+                st.error(f"Lỗi khi chạy App Data Engine: {e}")
+
+    if st.session_state.ai_app_data:
+        st.markdown('<div class="section-title">Tầng 1: App Data Engine Output</div>', unsafe_allow_html=True)
+        app_data = st.session_state.ai_app_data
+        preview_items = {
+            "Ticker": app_data.get("Ticker"),
+            "Price": app_data.get("Price"),
+            "App Decision": app_data.get("Final Decision"),
+            "Entry Zone": app_data.get("Entry Zone"),
+            "Stop Loss": app_data.get("Stop Loss"),
+            "Target 1": app_data.get("Target 1"),
+            "Target 2": app_data.get("Target 2"),
+            "Risk/Reward": app_data.get("Risk/Reward"),
+            "Earnings": f"{app_data.get('Earnings Status')} | {app_data.get('Earnings Date')}",
+            "SEC Risk": app_data.get("SEC Filing Risk"),
+            "News Risk": app_data.get("News Risk"),
+        }
+        st.dataframe(pd.DataFrame([preview_items]), use_container_width=True, hide_index=True)
+        with st.expander("Xem toàn bộ dữ liệu app gửi cho OpenAI"):
+            st.json(app_data)
+
+    if run_ai_layer:
+        api_key = get_openai_api_key()
+        if not api_key:
+            st.error("Bạn chưa nhập API key hoặc chưa lưu OPENAI_API_KEY trong Streamlit Secrets.")
+        elif not st.session_state.ai_app_data:
+            st.error("Bạn cần bấm Run App Data Engine trước.")
+        elif uploaded_chart is None:
+            st.error("Bạn chưa upload chart.")
+        else:
+            try:
+                with st.spinner("Đang chạy Tầng 2: OpenAI Final Analyst..."):
+                    result = run_ai_final_analysis(
+                        app_data=st.session_state.ai_app_data,
+                        image_bytes=uploaded_chart.getvalue(),
+                        mime_type=uploaded_chart.type or "image/png",
+                        user_context=user_context,
+                        trading_style=trading_style,
+                        api_key=api_key,
+                    )
+                    st.session_state.ai_result = result
+                st.success("AI Final Analysis đã hoàn tất.")
+            except Exception as e:
+                st.error(f"Lỗi khi chạy AI Final Analysis: {e}")
+
+    if st.session_state.ai_result:
+        st.markdown('<div class="section-title">Tầng 2: AI Final Decision</div>', unsafe_allow_html=True)
+        render_ai_result(st.session_state.ai_result)
+        with st.expander("Raw AI JSON"):
+            st.json(st.session_state.ai_result)
+        st.download_button(
+            "⬇️ Download AI Analysis JSON",
+            data=json.dumps(st.session_state.ai_result, ensure_ascii=False, indent=2).encode("utf-8"),
+            file_name=f"ai_final_analysis_{(ai_ticker or 'ticker')}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
 with tab_guide:
     st.markdown('<div class="section-title">Cài như app trên iPhone</div>', unsafe_allow_html=True)
     st.markdown(
@@ -1671,7 +1933,7 @@ with tab_guide:
         3. Chọn **Add to Home Screen**.  
         4. Đặt tên **Stock App Pro** rồi bấm **Add**.  
 
-        Bản này đã đồng bộ logic với PC: ETF filter, earnings backup, SEC filter thông minh, news đa nguồn, Entry Zone và Falling Knife.
+        Bản này có kiến trúc 2 tầng: Tầng 1 Data Engine miễn phí như app hiện tại; Tầng 2 AI Final Analysis chỉ chạy khi bạn upload chart và bấm nút AI.
         """
     )
     st.info("Gợi ý: dùng tab Quick Analyze khi bạn muốn kiểm tra nhanh một mã mới. Dùng PC để phân tích sâu và lưu Excel.")
