@@ -1560,14 +1560,15 @@ AI_FINAL_SCHEMA = {
     "confidence": "High / Medium / Low",
     "app_decision_review": "Agree / More cautious / More bullish / Mixed",
     "chart_confirmation": "Confirmed / Not confirmed / Weak / Unclear",
+    "trade_status": "Active setup / Reference only / No trade",
     "main_reason": "Short main reason",
     "key_points": ["point 1", "point 2", "point 3"],
     "risk_warnings": ["risk 1", "risk 2"],
     "action_plan": ["step 1", "step 2", "step 3"],
-    "final_entry_zone": "price zone or Wait",
-    "final_stop_loss": "price or N/A",
-    "final_target_1": "price or N/A",
-    "final_target_2": "price or N/A",
+    "final_entry_zone": "price zone. If decision is WAIT, still provide Reference Entry Zone from app data and label it Reference only",
+    "final_stop_loss": "price. If decision is WAIT, still provide Reference Stop from app data and label it Reference only",
+    "final_target_1": "price. If decision is WAIT, still provide Reference Target 1 from app data and label it Reference only",
+    "final_target_2": "price. If decision is WAIT, still provide Reference Target 2 from app data and label it Reference only",
     "invalid_if": "condition that cancels the setup",
     "summary_vi": "Vietnamese practical summary"
 }
@@ -1596,6 +1597,9 @@ Important rules:
 - If app data is bullish but chart shows rejection at resistance, prefer WAIT.
 - If chart confirms support hold, higher low, breakout, or pullback holding, you may upgrade to WATCH TO ENTER.
 - Always give a practical action plan.
+- IMPORTANT: If your final decision is WAIT, CAUTION, BREAKOUT WATCH, PULLBACK WATCH, or REVERSAL WATCH, do NOT return N/A for entry/stop/targets. Instead, keep the app's Entry Zone, Stop Loss, Target 1, and Target 2 as REFERENCE levels and clearly label them as "Reference only - not active trade yet".
+- Only use N/A for entry/stop/targets when the final decision is NO TRADE and the setup is invalid or too risky.
+- If the chart is not confirmed, say "Chart not confirmed" but still show the app reference levels for tracking.
 - Return valid JSON only with keys matching the provided schema.
 """
 
@@ -1631,18 +1635,85 @@ Return JSON only using this schema:
         return json.loads(cleaned)
 
 
+
+def _is_missing_level(value):
+    text = str(value or "").strip().lower()
+    return text in ["", "—", "n/a", "na", "none", "null", "wait"]
+
+
+def normalize_ai_result(result, app_data):
+    """Keep reference levels visible when AI says WAIT/CAUTION/WATCH.
+
+    This avoids showing Entry/Stop/Targets as N/A when the setup is not active yet,
+    while still making clear that these are tracking levels, not a buy signal.
+    """
+    if not isinstance(result, dict):
+        return result
+
+    decision = str(result.get("ai_final_decision", "")).upper()
+    no_trade = "NO TRADE" in decision
+    active_trade = "WATCH TO ENTER" in decision
+
+    entry_zone = app_data.get("Entry Zone") or app_data.get("Aggressive Entry") or ""
+    deep_entry = app_data.get("Deep Safe Entry") or ""
+    stop_loss = app_data.get("Stop Loss") or app_data.get("Safe Stop") or ""
+    target_1 = app_data.get("Target 1") or ""
+    target_2 = app_data.get("Target 2") or ""
+
+    if active_trade:
+        default_status = "Active setup"
+        prefix = "Active setup"
+    elif no_trade:
+        default_status = "No trade"
+        prefix = "No trade"
+    else:
+        default_status = "Reference only"
+        prefix = "Reference only - not active trade yet"
+
+    if not result.get("trade_status"):
+        result["trade_status"] = default_status
+
+    # For WAIT / CAUTION / WATCH types, keep app-calculated levels as reference.
+    if not no_trade:
+        if _is_missing_level(result.get("final_entry_zone")):
+            if deep_entry and deep_entry != entry_zone:
+                result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
+            else:
+                result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}"
+        if _is_missing_level(result.get("final_stop_loss")):
+            result["final_stop_loss"] = f"{prefix}: {stop_loss}"
+        if _is_missing_level(result.get("final_target_1")):
+            result["final_target_1"] = f"{prefix}: {target_1}"
+        if _is_missing_level(result.get("final_target_2")):
+            result["final_target_2"] = f"{prefix}: {target_2}"
+
+    # If AI returned plain "Wait" as entry, make it clearer.
+    if str(result.get("final_entry_zone", "")).strip().lower() == "wait":
+        result["final_entry_zone"] = f"Reference only - not active trade yet: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
+
+    # Make invalid_if practical if blank.
+    if _is_missing_level(result.get("invalid_if")):
+        result["invalid_if"] = f"Invalid if price breaks below Stop Loss {stop_loss}, or chart fails to confirm near Entry Zone."
+
+    return result
+
+
 def render_ai_result(result):
     decision = safe_value(result.get("ai_final_decision", "—"))
     confidence = safe_value(result.get("confidence", "—"))
     review = safe_value(result.get("app_decision_review", "—"))
     chart_conf = safe_value(result.get("chart_confirmation", "—"))
+    trade_status = safe_value(result.get("trade_status", "—"))
     st.markdown(
         f'<span class="badge {badge_class(decision)}">AI Final: {decision}</span> '
         f'<span class="badge badge-info">Confidence: {confidence}</span> '
         f'<span class="badge badge-neutral">App Review: {review}</span> '
-        f'<span class="badge badge-neutral">Chart: {chart_conf}</span>',
+        f'<span class="badge badge-neutral">Chart: {chart_conf}</span> '
+        f'<span class="badge badge-neutral">Status: {trade_status}</span>',
         unsafe_allow_html=True,
     )
+    if str(trade_status).lower().startswith("reference"):
+        st.info("Các mức Entry / Stop / Target bên dưới là vùng tham khảo để theo dõi. Đây chưa phải lệnh mua vì AI chưa thấy chart xác nhận.")
     st.markdown('<div class="section-title">AI Action Plan</div>', unsafe_allow_html=True)
     st.write(result.get("main_reason", ""))
 
@@ -1905,6 +1976,7 @@ with tab_ai:
                         trading_style=trading_style,
                         api_key=api_key,
                     )
+                    result = normalize_ai_result(result, st.session_state.ai_app_data)
                     st.session_state.ai_result = result
                 st.success("AI Final Analysis đã hoàn tất.")
             except Exception as e:
