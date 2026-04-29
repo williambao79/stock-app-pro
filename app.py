@@ -1561,15 +1561,15 @@ AI_FINAL_SCHEMA = {
     "app_decision_review": "Agree / More cautious / More bullish / Mixed",
     "chart_confirmation": "Confirmed / Not confirmed / Weak / Unclear",
     "trade_status": "Active setup / Reference only / No trade",
-    "main_reason": "Short main reason",
-    "key_points": ["point 1", "point 2", "point 3"],
-    "risk_warnings": ["risk 1", "risk 2"],
-    "action_plan": ["step 1", "step 2", "step 3"],
+    "main_reason": "Lý do chính ngắn gọn bằng tiếng Việt",
+    "key_points": ["Điểm chính 1 bằng tiếng Việt", "Điểm chính 2 bằng tiếng Việt", "Điểm chính 3 bằng tiếng Việt"],
+    "risk_warnings": ["Cảnh báo rủi ro 1 bằng tiếng Việt", "Cảnh báo rủi ro 2 bằng tiếng Việt"],
+    "action_plan": ["Bước hành động 1 bằng tiếng Việt", "Bước hành động 2 bằng tiếng Việt", "Bước hành động 3 bằng tiếng Việt"],
     "final_entry_zone": "price zone. If decision is WAIT, still provide Reference Entry Zone from app data and label it Reference only",
     "final_stop_loss": "price. If decision is WAIT, still provide Reference Stop from app data and label it Reference only",
     "final_target_1": "price. If decision is WAIT, still provide Reference Target 1 from app data and label it Reference only",
     "final_target_2": "price. If decision is WAIT, still provide Reference Target 2 from app data and label it Reference only",
-    "invalid_if": "condition that cancels the setup",
+    "invalid_if": "Điều kiện làm setup mất hiệu lực, viết bằng tiếng Việt",
     "summary_vi": "Vietnamese practical summary"
 }
 
@@ -1597,6 +1597,8 @@ Important rules:
 - If app data is bullish but chart shows rejection at resistance, prefer WAIT.
 - If chart confirms support hold, higher low, breakout, or pullback holding, you may upgrade to WATCH TO ENTER.
 - Always give a practical action plan.
+- Write ALL user-facing text in Vietnamese for these fields: main_reason, key_points, risk_warnings, action_plan, invalid_if, summary_vi.
+- Keep only technical labels such as Entry Zone, Stop Loss, Target 1, Target 2 in English if needed.
 - IMPORTANT: If your final decision is WAIT, CAUTION, BREAKOUT WATCH, PULLBACK WATCH, or REVERSAL WATCH, do NOT return N/A for entry/stop/targets. Instead, keep the app's Entry Zone, Stop Loss, Target 1, and Target 2 as REFERENCE levels and clearly label them as "Reference only - not active trade yet".
 - Only use N/A for entry/stop/targets when the final decision is NO TRADE and the setup is invalid or too risky.
 - If the chart is not confirmed, say "Chart not confirmed" but still show the app reference levels for tracking.
@@ -1668,7 +1670,7 @@ def normalize_ai_result(result, app_data):
         prefix = "No trade"
     else:
         default_status = "Reference only"
-        prefix = "Reference only - not active trade yet"
+        prefix = "Vùng tham khảo - chưa phải lệnh mua"
 
     if not result.get("trade_status"):
         result["trade_status"] = default_status
@@ -1689,11 +1691,11 @@ def normalize_ai_result(result, app_data):
 
     # If AI returned plain "Wait" as entry, make it clearer.
     if str(result.get("final_entry_zone", "")).strip().lower() == "wait":
-        result["final_entry_zone"] = f"Reference only - not active trade yet: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
+        result["final_entry_zone"] = f"Vùng tham khảo - chưa phải lệnh mua: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
 
     # Make invalid_if practical if blank.
     if _is_missing_level(result.get("invalid_if")):
-        result["invalid_if"] = f"Invalid if price breaks below Stop Loss {stop_loss}, or chart fails to confirm near Entry Zone."
+        result["invalid_if"] = f"Setup mất hiệu lực nếu giá thủng Stop Loss {stop_loss}, hoặc chart không có nến xác nhận tại Entry Zone."
 
     return result
 
@@ -1705,41 +1707,41 @@ def render_ai_result(result):
     chart_conf = safe_value(result.get("chart_confirmation", "—"))
     trade_status = safe_value(result.get("trade_status", "—"))
     st.markdown(
-        f'<span class="badge {badge_class(decision)}">AI Final: {decision}</span> '
-        f'<span class="badge badge-info">Confidence: {confidence}</span> '
-        f'<span class="badge badge-neutral">App Review: {review}</span> '
+        f'<span class="badge {badge_class(decision)}">AI kết luận: {decision}</span> '
+        f'<span class="badge badge-info">Độ tin cậy: {confidence}</span> '
+        f'<span class="badge badge-neutral">So với app: {review}</span> '
         f'<span class="badge badge-neutral">Chart: {chart_conf}</span> '
-        f'<span class="badge badge-neutral">Status: {trade_status}</span>',
+        f'<span class="badge badge-neutral">Trạng thái: {trade_status}</span>',
         unsafe_allow_html=True,
     )
     if str(trade_status).lower().startswith("reference"):
         st.info("Các mức Entry / Stop / Target bên dưới là vùng tham khảo để theo dõi. Đây chưa phải lệnh mua vì AI chưa thấy chart xác nhận.")
-    st.markdown('<div class="section-title">AI Action Plan</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Kế hoạch hành động AI</div>', unsafe_allow_html=True)
     st.write(result.get("main_reason", ""))
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**Final levels**")
+        st.markdown("**Vùng giá tham khảo**")
         st.write(f"**Entry:** {result.get('final_entry_zone', '—')}")
         st.write(f"**Stop:** {result.get('final_stop_loss', '—')}")
         st.write(f"**Target 1:** {result.get('final_target_1', '—')}")
         st.write(f"**Target 2:** {result.get('final_target_2', '—')}")
-        st.write(f"**Invalid if:** {result.get('invalid_if', '—')}")
+        st.write(f"**Mất hiệu lực nếu:** {result.get('invalid_if', '—')}")
     with c2:
-        st.markdown("**Summary**")
+        st.markdown("**Tóm tắt**")
         st.write(result.get("summary_vi", "—"))
 
     c3, c4, c5 = st.columns(3)
     with c3:
-        st.markdown("**Key points**")
+        st.markdown("**Điểm chính**")
         for x in result.get("key_points", []) or []:
             st.write(f"- {x}")
     with c4:
-        st.markdown("**Risk warnings**")
+        st.markdown("**Cảnh báo rủi ro**")
         for x in result.get("risk_warnings", []) or []:
             st.write(f"- {x}")
     with c5:
-        st.markdown("**Next steps**")
+        st.markdown("**Bước tiếp theo**")
         for x in result.get("action_plan", []) or []:
             st.write(f"- {x}")
 
@@ -1985,8 +1987,6 @@ with tab_ai:
     if st.session_state.ai_result:
         st.markdown('<div class="section-title">Tầng 2: AI Final Decision</div>', unsafe_allow_html=True)
         render_ai_result(st.session_state.ai_result)
-        with st.expander("Raw AI JSON"):
-            st.json(st.session_state.ai_result)
         st.download_button(
             "⬇️ Download AI Analysis JSON",
             data=json.dumps(st.session_state.ai_result, ensure_ascii=False, indent=2).encode("utf-8"),
