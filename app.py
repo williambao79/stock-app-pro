@@ -245,8 +245,22 @@ def find_chart_trade_levels(data, lookback=180):
             resistances = resistances[1:]
 
     support = supports[0]["price"] if supports else float(recent["Low"].tail(30).min())
+
+    # Manual trader rule v28:
+    # If there is a failed intraday pivot above current price and the nearest support is too close,
+    # treat that nearest support as a minor/noisy level. Promote the main support to a deeper,
+    # better-tested zone below price. This matches ONDS: ignore tiny 10.xx support and prefer the
+    # real support area near 9.16/9.30 when price is 10.32.
+    if failed_pivots and close > 0:
+        nearest_support_dist = (close - support) / close * 100
+        if nearest_support_dist < 4.0:
+            deeper_main_candidates = [c for c in supports if c["price"] <= close * 0.93]
+            if deeper_main_candidates:
+                deeper_main_candidates.sort(key=lambda c: (-c["price"], -strength(c)))
+                support = deeper_main_candidates[0]["price"]
+
     deep_support_candidates = [c for c in supports if c["price"] < support * 0.985]
-    deep_support_candidates.sort(key=lambda c: (abs(support - c["price"]) / support * 100 - strength(c) * 0.10))
+    deep_support_candidates.sort(key=lambda c: (-c["price"], -strength(c)))
     deep_support = deep_support_candidates[0]["price"] if deep_support_candidates else min(support * 0.955, float(recent["Low"].tail(60).min()))
     resistance = resistances[0]["price"] if resistances else float(recent["High"].tail(60).max())
     failed_pivot = failed_pivots[0]["price"] if failed_pivots else None
@@ -1316,23 +1330,24 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             score = max(score, 3) if final_decision in ["BREAKOUT WATCH", "REVERSAL WATCH"] else score
 
 
-        # Entry categories chuẩn:
-        # Aggressive Entry = vùng vào sớm hơn, gần giá hiện tại hơn, chỉ dùng khi cổ phiếu mạnh và có xác nhận.
-        # Safe Entry = vùng vào chính quanh Support 1.
+        # Entry categories chuẩn v28:
+        # Aggressive Entry = pullback sớm gần giá hiện tại, luôn nằm DƯỚI current price.
+        # Safe Entry = vùng vào chính quanh Support 1 thật sự.
         # Deep Safe Entry = vùng pullback sâu hơn quanh Deep Support.
         # Breakout Entry = chỉ dùng khi đóng cửa vượt Resistance 1 với volume mạnh.
-        if setup == "Near Resistance":
-            early_entry_low = close * 0.95
-            early_entry_high = close * 0.98
+        if close > aggressive_entry_high:
+            # Giá đang cao hơn support: aggressive entry là pullback nhẹ từ giá hiện tại,
+            # không được cao hơn current price để tránh hiểu là mua đuổi.
+            early_entry_low = close * 0.972
+            early_entry_high = close * 0.996
         elif aggressive_entry_low <= close <= aggressive_entry_high:
+            # Giá đang nằm trong Safe Entry: aggressive = phần trên của safe zone nhưng vẫn dưới current.
             early_entry_low = max(aggressive_entry_low, close * 0.985)
-            early_entry_high = min(aggressive_entry_high, close * 1.01)
-        elif close > aggressive_entry_high:
-            early_entry_low = close * 0.975
-            early_entry_high = close * 1.005
+            early_entry_high = min(aggressive_entry_high, close * 0.996)
         else:
+            # Giá đã thấp hơn Safe Entry: không chase, giữ aggressive quanh safe zone tham khảo.
             early_entry_low = aggressive_entry_low
-            early_entry_high = min(aggressive_entry_high, close * 1.01)
+            early_entry_high = min(aggressive_entry_high, close * 0.996)
 
         early_entry_low = max(early_entry_low, 0)
         early_entry_high = max(early_entry_high, early_entry_low)
@@ -1658,7 +1673,7 @@ def render_stock_card(row):
                 <span class="badge {badge_class(decision)}">{decision}</span>
             </div>
             <div class="metric-grid">
-                <div class="metric-box"><div class="metric-label">Safe Entry</div><div class="metric-value">{safe_entry or '—'}</div></div>
+                <div class="metric-box"><div class="metric-label">Aggressive Entry</div><div class="metric-value">{aggressive_entry or '—'}</div></div>
                 <div class="metric-box"><div class="metric-label">Stop Loss</div><div class="metric-value">{stop}</div></div>
                 <div class="metric-box"><div class="metric-label">Target</div><div class="metric-value">{target1} / {target2}</div></div>
                 <div class="metric-box"><div class="metric-label">Risk / Reward</div><div class="metric-value">{rr}</div></div>
@@ -1671,8 +1686,8 @@ def render_stock_card(row):
                 <span class="pill">Resistance: {resistance}</span>
             </div>
             <div class="action-box"><b>Action:</b> {action or '—'}<br>
-                <span class="small-muted">Aggressive Entry: {aggressive_entry or '—'}</span><br>
-                <span class="small-muted">Safe Entry: {safe_entry or '—'}</span><br>
+                <span class="small-muted">Aggressive Entry (vào sớm): {aggressive_entry or '—'}</span><br>
+                <span class="small-muted">Safe Entry (gần Support 1): {safe_entry or '—'}</span><br>
                 <span class="small-muted">Deep Safe Entry: {deep_entry or '—'}</span><br>
                 <span class="small-muted">Breakout Entry: {breakout_entry or '—'}</span><br>
                 <span class="small-muted">Các vùng entry chỉ là vùng quan sát. Cần chart xác nhận trước khi mua.</span>
