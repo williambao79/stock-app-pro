@@ -1628,8 +1628,10 @@ Important rules:
 - Always give a practical action plan.
 - Write ALL user-facing text in Vietnamese for these fields: main_reason, key_points, risk_warnings, action_plan, invalid_if, summary_vi.
 - Keep only technical labels such as Entry Zone, Stop Loss, Target 1, Target 2 in English if needed.
-- IMPORTANT: If your final decision is WAIT, CAUTION, BREAKOUT WATCH, PULLBACK WATCH, or REVERSAL WATCH, do NOT return N/A for entry/stop/targets. Instead, keep the app's Entry Zone, Stop Loss, Target 1, and Target 2 as REFERENCE levels and clearly label them as "Reference only - not active trade yet".
-- Only use N/A for entry/stop/targets when the final decision is NO TRADE and the setup is invalid or too risky.
+- IMPORTANT: Never return N/A for Entry Zone / Stop Loss / Target 1 / Target 2 if app data provides those levels.
+- Even when the final decision is NO TRADE, keep the app's Entry Zone, Stop Loss, Target 1, and Target 2 as REFERENCE ONLY levels for tracking.
+- If final decision is NO TRADE, clearly label levels as "No trade - reference only, not active trade".
+- If final decision is WAIT, CAUTION, BREAKOUT WATCH, PULLBACK WATCH, or REVERSAL WATCH, label levels as "Reference only - not active trade yet".
 - If the chart is not confirmed, say "Chart not confirmed" but still show the app reference levels for tracking.
 - Return valid JSON only with keys matching the provided schema.
 """
@@ -1696,27 +1698,27 @@ def normalize_ai_result(result, app_data):
         prefix = "Active setup"
     elif no_trade:
         default_status = "No trade"
-        prefix = "No trade"
+        prefix = "No trade - reference only, not active trade"
     else:
         default_status = "Reference only"
-        prefix = "Vùng tham khảo - chưa phải lệnh mua"
+        prefix = "Reference only - not active trade yet"
 
     if not result.get("trade_status"):
         result["trade_status"] = default_status
 
-    # For WAIT / CAUTION / WATCH types, keep app-calculated levels as reference.
-    if not no_trade:
-        if _is_missing_level(result.get("final_entry_zone")):
-            if deep_entry and deep_entry != entry_zone:
-                result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
-            else:
-                result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}"
-        if _is_missing_level(result.get("final_stop_loss")):
-            result["final_stop_loss"] = f"{prefix}: {stop_loss}"
-        if _is_missing_level(result.get("final_target_1")):
-            result["final_target_1"] = f"{prefix}: {target_1}"
-        if _is_missing_level(result.get("final_target_2")):
-            result["final_target_2"] = f"{prefix}: {target_2}"
+    # Always keep app-calculated levels visible as reference when available.
+    # Even NO TRADE should show these levels for tracking, not as a buy signal.
+    if _is_missing_level(result.get("final_entry_zone")):
+        if deep_entry and deep_entry != entry_zone:
+            result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
+        else:
+            result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}"
+    if _is_missing_level(result.get("final_stop_loss")):
+        result["final_stop_loss"] = f"{prefix}: {stop_loss}"
+    if _is_missing_level(result.get("final_target_1")):
+        result["final_target_1"] = f"{prefix}: {target_1}"
+    if _is_missing_level(result.get("final_target_2")):
+        result["final_target_2"] = f"{prefix}: {target_2}"
 
     # If AI returned plain "Wait" as entry, make it clearer.
     if str(result.get("final_entry_zone", "")).strip().lower() == "wait":
