@@ -1316,8 +1316,11 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             score = max(score, 3) if final_decision in ["BREAKOUT WATCH", "REVERSAL WATCH"] else score
 
 
-        # Aggressive Entry = vùng vào sớm hơn, gần giá hiện tại hơn Entry Zone.
-        # Entry Zone vẫn là vùng chính theo support. Deep Safe Entry là vùng pullback sâu hơn.
+        # Entry categories chuẩn:
+        # Aggressive Entry = vùng vào sớm hơn, gần giá hiện tại hơn, chỉ dùng khi cổ phiếu mạnh và có xác nhận.
+        # Safe Entry = vùng vào chính quanh Support 1.
+        # Deep Safe Entry = vùng pullback sâu hơn quanh Deep Support.
+        # Breakout Entry = chỉ dùng khi đóng cửa vượt Resistance 1 với volume mạnh.
         if setup == "Near Resistance":
             early_entry_low = close * 0.95
             early_entry_high = close * 0.98
@@ -1359,7 +1362,9 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             "Failed Intraday Pivot": round(failed_intraday_pivot, 2) if failed_intraday_pivot else "",
             "Breakout Entry": round(breakout_entry, 2),
             "Range Position %": round(range_position_pct, 2),
+            # Backward compatible: Entry Zone = Safe Entry quanh Support 1
             "Entry Zone": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
+            "Safe Entry": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
             "Deep Safe Entry": f"{round(safe_entry_low, 2)} - {round(safe_entry_high, 2)}",
             "Aggressive Entry": f"{round(early_entry_low, 2)} - {round(early_entry_high, 2)}",
             "Entry Distance %": round(entry_distance_pct, 2),
@@ -1394,7 +1399,7 @@ def save_to_excel(df):
         "Trend", "Setup", "Action",
         "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
         "Support", "Deep Support", "Resistance", "Resistance 2", "Failed Intraday Pivot", "Range Position %",
-        "Entry Zone", "Deep Safe Entry",
+        "Entry Zone", "Safe Entry", "Deep Safe Entry",
         "Aggressive Entry", "Entry Distance %",
         "Entry Quality",
         "Aggressive Stop", "Safe Stop", "Stop Loss",
@@ -1465,7 +1470,7 @@ APP_COLUMNS = [
     "Trend", "Setup", "Action",
     "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
     "Support", "Deep Support", "Resistance", "Resistance 2", "Failed Intraday Pivot", "Range Position %",
-    "Entry Zone", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %",
+    "Entry Zone", "Safe Entry", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %",
     "Entry Quality", "Aggressive Stop", "Safe Stop", "Stop Loss",
     "Target 1", "Target 2", "Risk/Reward",
     "Chart Confirmation", "Chart Adjustment", "Chart Note",
@@ -1476,7 +1481,7 @@ APP_COLUMNS = [
 
 PREVIEW_COLUMNS = [
     "Ticker", "Price", "Score", "Final Decision", "Support", "Resistance",
-    "Entry Zone", "Deep Safe Entry", "Breakout Entry", "Stop Loss", "Target 1", "Target 2", "Risk/Reward"
+    "Aggressive Entry", "Safe Entry", "Deep Safe Entry", "Breakout Entry", "Stop Loss", "Target 1", "Target 2", "Risk/Reward"
 ]
 
 st.markdown(
@@ -1632,8 +1637,10 @@ def render_stock_card(row):
     rsi = safe_value(row.get("RSI", ""))
     rr = safe_value(row.get("Risk/Reward", ""))
     entry = row.get("Entry Zone", "")
+    safe_entry = row.get("Safe Entry", "") or entry
     deep_entry = row.get("Deep Safe Entry", "")
     aggressive_entry = row.get("Aggressive Entry", "")
+    breakout_entry = row.get("Breakout Entry", "")
     stop = safe_money(row.get("Stop Loss", ""))
     target1 = safe_money(row.get("Target 1", ""))
     target2 = safe_money(row.get("Target 2", ""))
@@ -1651,7 +1658,7 @@ def render_stock_card(row):
                 <span class="badge {badge_class(decision)}">{decision}</span>
             </div>
             <div class="metric-grid">
-                <div class="metric-box"><div class="metric-label">Entry Zone</div><div class="metric-value">{entry or '—'}</div></div>
+                <div class="metric-box"><div class="metric-label">Safe Entry</div><div class="metric-value">{safe_entry or '—'}</div></div>
                 <div class="metric-box"><div class="metric-label">Stop Loss</div><div class="metric-value">{stop}</div></div>
                 <div class="metric-box"><div class="metric-label">Target</div><div class="metric-value">{target1} / {target2}</div></div>
                 <div class="metric-box"><div class="metric-label">Risk / Reward</div><div class="metric-value">{rr}</div></div>
@@ -1665,8 +1672,10 @@ def render_stock_card(row):
             </div>
             <div class="action-box"><b>Action:</b> {action or '—'}<br>
                 <span class="small-muted">Aggressive Entry: {aggressive_entry or '—'}</span><br>
+                <span class="small-muted">Safe Entry: {safe_entry or '—'}</span><br>
                 <span class="small-muted">Deep Safe Entry: {deep_entry or '—'}</span><br>
-                <span class="small-muted">Entry zone only. Check Final Decision and chart before buying.</span>
+                <span class="small-muted">Breakout Entry: {breakout_entry or '—'}</span><br>
+                <span class="small-muted">Các vùng entry chỉ là vùng quan sát. Cần chart xác nhận trước khi mua.</span>
             </div>
         </div>
         """,
@@ -1728,7 +1737,7 @@ def compact_app_data(row, market_notes=""):
         "Earnings Status", "Earnings Date", "Market Condition", "Market Filter",
         "Trend", "Setup", "Action", "RSI", "Day Change %", "RSI Status",
         "Momentum", "Volume Status", "Support", "Deep Support", "Resistance", "Resistance 2", "Breakout Entry", "Range Position %", "Entry Zone",
-        "Deep Safe Entry", "Aggressive Entry", "Entry Distance %", "Entry Quality",
+        "Safe Entry", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %", "Entry Quality",
         "Aggressive Stop", "Safe Stop", "Stop Loss", "Target 1", "Target 2",
         "Risk/Reward", "Chart Confirmation", "Chart Adjustment", "Chart Note",
         "News Sentiment", "News Risk", "Recent Catalyst", "SEC Filing Risk",
@@ -1757,7 +1766,7 @@ AI_FINAL_SCHEMA = {
     "key_points": ["Điểm chính 1 bằng tiếng Việt", "Điểm chính 2 bằng tiếng Việt", "Điểm chính 3 bằng tiếng Việt"],
     "risk_warnings": ["Cảnh báo rủi ro 1 bằng tiếng Việt", "Cảnh báo rủi ro 2 bằng tiếng Việt"],
     "action_plan": ["Bước hành động 1 bằng tiếng Việt", "Bước hành động 2 bằng tiếng Việt", "Bước hành động 3 bằng tiếng Việt"],
-    "final_entry_zone": "price zone. If decision is WAIT or NO TRADE, still provide Reference Entry Zone / Stop / Target from app data and label them Reference only",
+    "final_entry_zone": "Show 4 entry categories if available: Aggressive Entry, Safe Entry, Deep Safe Entry, Breakout Entry. If decision is WAIT or NO TRADE, label them Reference only",
     "final_stop_loss": "price. If decision is WAIT, still provide Reference Stop from app data and label it Reference only",
     "final_target_1": "price. If decision is WAIT, still provide Reference Target 1 from app data and label it Reference only",
     "final_target_2": "price. If decision is WAIT, still provide Reference Target 2 from app data and label it Reference only",
@@ -1776,7 +1785,7 @@ The app has already collected real data and calculated technical/risk levels.
 Your job is NOT to replace the app calculations. Your job is to:
 1) read the uploaded chart image,
 2) compare the chart to the app data,
-3) evaluate whether the app's chart-style levels make sense: Support, Deep Support, Resistance, Resistance 2, Entry Zone, Deep Safe Entry, Breakout Entry, Stop and Targets,
+3) evaluate whether the app's chart-style levels make sense: Support, Deep Support, Resistance, Resistance 2, Aggressive Entry, Safe Entry, Deep Safe Entry, Breakout Entry, Stop and Targets,
 4) incorporate app-collected news, SEC, earnings, market condition, ETF filter, and falling-knife risk,
 5) produce one practical final decision using this rule: prefer pullback entries near support, avoid buying in the middle zone, avoid chasing near resistance, and only accept breakout entries when chart/volume confirm.
 
@@ -1796,9 +1805,14 @@ Important rules:
 - If chart confirms breakout above Resistance 1 with strong volume, you may upgrade to BREAKOUT WATCH.
 - Always give a practical action plan.
 - Write ALL user-facing text in Vietnamese for these fields: main_reason, key_points, risk_warnings, action_plan, invalid_if, summary_vi.
-- Keep only technical labels such as Entry Zone, Stop Loss, Target 1, Target 2 in English if needed.
-- IMPORTANT: Never return N/A for Entry Zone / Stop Loss / Target 1 / Target 2 if app data provides those levels.
-- Even when the final decision is NO TRADE, keep the app's Entry Zone, Stop Loss, Target 1, and Target 2 as REFERENCE ONLY levels for tracking.
+- Keep only technical labels such as Aggressive Entry, Safe Entry, Deep Safe Entry, Breakout Entry, Stop Loss, Target 1, Target 2 in English if needed.
+- IMPORTANT: Never return N/A for Aggressive Entry / Safe Entry / Deep Safe Entry / Breakout Entry / Stop Loss / Target 1 / Target 2 if app data provides those levels.
+- Do not call Safe Entry simply "Entry Zone" in the final result. Explain all four entry categories clearly.
+- Aggressive Entry = early pullback near current price, not the safest entry.
+- Safe Entry = preferred pullback zone near Support 1.
+- Deep Safe Entry = more conservative zone near Deep Support.
+- Breakout Entry = only valid if price closes above Resistance 1 with strong volume.
+- Even when the final decision is NO TRADE, keep the app's Aggressive/Safe/Deep/Breakout Entry, Stop Loss, Target 1, and Target 2 as REFERENCE ONLY levels for tracking.
 - If final decision is NO TRADE, clearly label levels as "No trade - reference only, not active trade".
 - If final decision is WAIT, CAUTION, BREAKOUT WATCH, PULLBACK WATCH, or REVERSAL WATCH, label levels as "Reference only - not active trade yet".
 - If the chart is not confirmed, say "Chart not confirmed" but still show the app reference levels for tracking.
@@ -1856,8 +1870,11 @@ def normalize_ai_result(result, app_data):
     no_trade = "NO TRADE" in decision
     active_trade = "WATCH TO ENTER" in decision
 
-    entry_zone = app_data.get("Entry Zone") or app_data.get("Aggressive Entry") or ""
+    aggressive_entry = app_data.get("Aggressive Entry") or ""
+    safe_entry = app_data.get("Safe Entry") or app_data.get("Entry Zone") or ""
     deep_entry = app_data.get("Deep Safe Entry") or ""
+    breakout_entry = app_data.get("Breakout Entry") or ""
+    entry_zone = safe_entry
     stop_loss = app_data.get("Stop Loss") or app_data.get("Safe Stop") or ""
     target_1 = app_data.get("Target 1") or ""
     target_2 = app_data.get("Target 2") or ""
@@ -1877,11 +1894,21 @@ def normalize_ai_result(result, app_data):
 
     # Always keep app-calculated levels visible as reference when available.
     # Even NO TRADE should show these levels for tracking, not as a buy signal.
-    if _is_missing_level(result.get("final_entry_zone")):
-        if deep_entry and deep_entry != entry_zone:
-            result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
-        else:
-            result["final_entry_zone"] = f"{prefix}: Entry Zone {entry_zone}"
+    entry_parts = []
+    if aggressive_entry:
+        entry_parts.append(f"Aggressive Entry {aggressive_entry}")
+    if safe_entry:
+        entry_parts.append(f"Safe Entry {safe_entry}")
+    if deep_entry:
+        entry_parts.append(f"Deep Safe Entry {deep_entry}")
+    if breakout_entry:
+        entry_parts.append(f"Breakout Entry trên {breakout_entry}")
+    full_entry_text = f"{prefix}: " + "; ".join(entry_parts) if entry_parts else f"{prefix}: —"
+
+    # Force the standardized 4-category entry text so users do not confuse aggressive entry with safe entry.
+    if _is_missing_level(result.get("final_entry_zone")) or "Aggressive Entry" not in str(result.get("final_entry_zone", "")) or "Safe Entry" not in str(result.get("final_entry_zone", "")):
+        result["final_entry_zone"] = full_entry_text
+
     if _is_missing_level(result.get("final_stop_loss")):
         result["final_stop_loss"] = f"{prefix}: {stop_loss}"
     if _is_missing_level(result.get("final_target_1")):
@@ -1891,11 +1918,11 @@ def normalize_ai_result(result, app_data):
 
     # If AI returned plain "Wait" as entry, make it clearer.
     if str(result.get("final_entry_zone", "")).strip().lower() == "wait":
-        result["final_entry_zone"] = f"Vùng tham khảo - chưa phải lệnh mua: Entry Zone {entry_zone}; Deep Safe Entry {deep_entry}"
+        result["final_entry_zone"] = full_entry_text
 
     # Make invalid_if practical if blank.
     if _is_missing_level(result.get("invalid_if")):
-        result["invalid_if"] = f"Setup mất hiệu lực nếu giá thủng Stop Loss {stop_loss}, hoặc chart không có nến xác nhận tại Entry Zone."
+        result["invalid_if"] = f"Setup mất hiệu lực nếu giá thủng Stop Loss {stop_loss}, hoặc chart không có nến xác nhận tại Safe Entry / Support."
 
     return result
 
@@ -1943,7 +1970,7 @@ def render_ai_result(result):
     left_html = (
         '<div class="panel-card ai-card-accent-blue">'
         '<div class="panel-title">🎯 Vùng giá tham khảo</div>'
-        f'<div class="level-line"><b>Entry:</b> {esc(result.get("final_entry_zone", "—"))}</div>'
+        f'<div class="level-line"><b>Các vùng Entry:</b> {esc(result.get("final_entry_zone", "—"))}</div>'
         f'<div class="level-line"><b>Stop:</b> {esc(result.get("final_stop_loss", "—"))}</div>'
         f'<div class="level-line"><b>Target 1:</b> {esc(result.get("final_target_1", "—"))}</div>'
         f'<div class="level-line"><b>Target 2:</b> {esc(result.get("final_target_2", "—"))}</div>'
@@ -2014,7 +2041,7 @@ def build_share_text(result, app_data=None):
     lines.append(str(result.get("main_reason", "—")))
     lines.append("")
     lines.append("Vùng giá tham khảo:")
-    lines.append(f"Entry: {result.get('final_entry_zone', '—')}")
+    lines.append(f"Entry categories: {result.get('final_entry_zone', '—')}")
     lines.append(f"Stop: {result.get('final_stop_loss', '—')}")
     lines.append(f"Target 1: {result.get('final_target_1', '—')}")
     lines.append(f"Target 2: {result.get('final_target_2', '—')}")
@@ -2215,7 +2242,10 @@ with tab_ai:
             "Ticker": app_data.get("Ticker"),
             "Price": app_data.get("Price"),
             "App Decision": app_data.get("Final Decision"),
-            "Entry Zone": app_data.get("Entry Zone"),
+            "Aggressive Entry": app_data.get("Aggressive Entry"),
+            "Safe Entry": app_data.get("Safe Entry") or app_data.get("Entry Zone"),
+            "Deep Safe Entry": app_data.get("Deep Safe Entry"),
+            "Breakout Entry": app_data.get("Breakout Entry"),
             "Stop Loss": app_data.get("Stop Loss"),
             "Target 1": app_data.get("Target 1"),
             "Target 2": app_data.get("Target 2"),
