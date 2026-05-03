@@ -162,7 +162,9 @@ def find_chart_trade_levels(data, lookback=180):
     - cluster close levels into zones
     - choose nearest strong resistance above current price
     - choose nearest support below current price and one deeper support
-    This mimics manual chart lines such as resistance 22.79, support 19.76, deep support 18.81.
+    - if price broke a small resistance intraday but closed back below it,
+      treat that level as a minor failed pivot, not the main resistance.
+    This mimics manual chart lines such as AMPX 22.79/19.76/18.81 and ONDS 11.02/9.16/8.72.
     """
     recent = data.tail(min(lookback, len(data))).copy().reset_index(drop=True)
     if recent.empty or len(recent) < 20:
@@ -196,17 +198,38 @@ def find_chart_trade_levels(data, lookback=180):
         return c["touches"] * 2.0 + c.get("volume_score", 0) * 0.5 + recency
 
     supports = [c for c in support_clusters if c["price"] < close * 0.995]
-    resistances = [c for c in resistance_clusters if c["price"] > close * 1.005]
+    raw_resistances = [c for c in resistance_clusters if c["price"] > close * 1.005]
 
     # Prefer nearby strong zones, not the absolute min/max.
     supports.sort(key=lambda c: (abs(close - c["price"]) / close * 100 - strength(c) * 0.15))
-    resistances.sort(key=lambda c: (abs(c["price"] - close) / close * 100 - strength(c) * 0.15))
+    raw_resistances.sort(key=lambda c: (abs(c["price"] - close) / close * 100 - strength(c) * 0.15))
+
+    # Manual chart rule from AMPX / ONDS examples:
+    # A small level just above current close should NOT be the main resistance if today's high
+    # already broke above it but the candle closed back below. That is a failed intraday pivot.
+    latest_high = float(recent["High"].iloc[-1])
+    failed_pivots = []
+    resistances = []
+    for c in raw_resistances:
+        price = float(c["price"])
+        broke_intraday = latest_high >= price * 1.002
+        failed_to_hold = close < price * 0.998
+        too_close_minor = (price - close) / max(close, 0.01) * 100 <= 2.5
+        if broke_intraday and failed_to_hold and too_close_minor:
+            failed_pivots.append(c)
+            continue
+        resistances.append(c)
+
+    # If every nearby resistance was filtered, still keep higher raw resistance candidates.
+    if not resistances:
+        resistances = [c for c in raw_resistances if c not in failed_pivots] or raw_resistances
 
     support = supports[0]["price"] if supports else float(recent["Low"].tail(30).min())
     deep_support_candidates = [c for c in supports if c["price"] < support * 0.985]
     deep_support_candidates.sort(key=lambda c: (abs(support - c["price"]) / support * 100 - strength(c) * 0.10))
     deep_support = deep_support_candidates[0]["price"] if deep_support_candidates else min(support * 0.955, float(recent["Low"].tail(60).min()))
     resistance = resistances[0]["price"] if resistances else float(recent["High"].tail(60).max())
+    failed_pivot = failed_pivots[0]["price"] if failed_pivots else None
 
     # Resistance 2 = stronger / higher resistance above Resistance 1.
     resistance_2_candidates = [c for c in resistances if c["price"] > resistance * 1.015]
@@ -223,7 +246,8 @@ def find_chart_trade_levels(data, lookback=180):
         "deep_support": float(deep_support),
         "resistance": float(resistance),
         "resistance_2": float(resistance_2),
-        "method": "pivot_cluster_v24_manual_chart_style",
+        "failed_intraday_pivot": float(failed_pivot) if failed_pivot else None,
+        "method": "pivot_cluster_v25_main_resistance_filters_failed_intraday_pivots",
     }
 
 
@@ -814,7 +838,10 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         support_deep = chart_levels["deep_support"]
         resistance = chart_levels["resistance"]
         resistance_2 = chart_levels.get("resistance_2", max(resistance * 1.06, close * 1.12))
+        failed_intraday_pivot = chart_levels.get("failed_intraday_pivot")
         swing_support = support_deep
+        if failed_intraday_pivot:
+            reasons.append(f"Pivot nhỏ {failed_intraday_pivot:.2f} đã bị phá trong phiên nhưng chưa giữ được khi đóng cửa; dùng resistance chính phía trên")
 
         score = 0
         reasons = []
@@ -1299,6 +1326,7 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             "Deep Support": round(support_deep, 2),
             "Resistance": round(resistance, 2),
             "Resistance 2": round(resistance_2, 2),
+            "Failed Intraday Pivot": round(failed_intraday_pivot, 2) if failed_intraday_pivot else "",
             "Breakout Entry": round(breakout_entry, 2),
             "Range Position %": round(range_position_pct, 2),
             "Entry Zone": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
@@ -1335,7 +1363,7 @@ def save_to_excel(df):
         "Market Condition", "Market Filter",
         "Trend", "Setup", "Action",
         "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
-        "Support", "Deep Support", "Resistance", "Resistance 2", "Range Position %",
+        "Support", "Deep Support", "Resistance", "Resistance 2", "Failed Intraday Pivot", "Range Position %",
         "Entry Zone", "Deep Safe Entry",
         "Aggressive Entry", "Entry Distance %",
         "Entry Quality",
@@ -1406,7 +1434,7 @@ APP_COLUMNS = [
     "Market Condition", "Market Filter",
     "Trend", "Setup", "Action",
     "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
-    "Support", "Deep Support", "Resistance", "Resistance 2", "Range Position %",
+    "Support", "Deep Support", "Resistance", "Resistance 2", "Failed Intraday Pivot", "Range Position %",
     "Entry Zone", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %",
     "Entry Quality", "Aggressive Stop", "Safe Stop", "Stop Loss",
     "Target 1", "Target 2", "Risk/Reward",
@@ -1729,6 +1757,7 @@ Important rules:
 - If app data says earnings or SEC risk is high, be conservative.
 - If price is near Support 1 and chart confirms support hold / green reversal / higher low, you may upgrade to WATCH TO ENTER or PULLBACK WATCH.
 - If price is near support but the chart shows a red candle/falling knife/no confirmation, prefer WAIT or NO TRADE.
+- If a minor resistance was broken intraday but price closed back below it, treat it as a failed intraday pivot, not the main resistance. Use the next stronger resistance above as Resistance 1 / Target 1.
 - If price is in the middle of Support 1 and Resistance 1, prefer WAIT / NO SETUP unless there is a very strong catalyst.
 - If price is close to Resistance 1, do not chase; prefer WAIT unless price clearly breaks out with volume.
 - If app data is bullish but chart shows rejection at resistance, prefer WAIT.
