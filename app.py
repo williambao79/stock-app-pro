@@ -186,9 +186,18 @@ def find_chart_trade_levels(data, lookback=180):
             swing_highs.append({"price": high, "idx": i, "volume_score": vol_score})
 
     # Include important recent highs/lows so fresh breakout/pullback zones are not missed.
-    for i in range(max(0, len(recent)-25), len(recent)):
+    # IMPORTANT: do NOT use the latest unfinished daily candle high as a main resistance.
+    # Example ONDS: price traded above a minor intraday pivot then closed back below it;
+    # that high should be treated as intraday noise/failed pivot, not Target 1.
+    recent_start = max(0, len(recent) - 25)
+    last_completed_idx = max(recent_start, len(recent) - 2)
+    for i in range(recent_start, last_completed_idx + 1):
         swing_lows.append({"price": float(recent.loc[i, "Low"]), "idx": i, "volume_score": 0})
         swing_highs.append({"price": float(recent.loc[i, "High"]), "idx": i, "volume_score": 0})
+    # Latest low can be useful for support risk, but latest high is not a confirmed resistance.
+    if len(recent) >= 2:
+        i = len(recent) - 1
+        swing_lows.append({"price": float(recent.loc[i, "Low"]), "idx": i, "volume_score": 0})
 
     support_clusters = _cluster_price_levels(swing_lows, tolerance_pct=1.35)
     resistance_clusters = _cluster_price_levels(swing_highs, tolerance_pct=1.35)
@@ -223,6 +232,17 @@ def find_chart_trade_levels(data, lookback=180):
     # If every nearby resistance was filtered, still keep higher raw resistance candidates.
     if not resistances:
         resistances = [c for c in raw_resistances if c not in failed_pivots] or raw_resistances
+
+    # Main resistance rule: Target 1 should be a meaningful resistance ABOVE current price,
+    # not a tiny pivot only 1-3% above price. If the nearest level is too close and there is
+    # a higher resistance candidate, promote the higher level to Resistance 1.
+    # This matches the manual ONDS logic: 10.42/10.60 = minor pivot, 11.02 = main resistance.
+    if len(resistances) >= 2:
+        first_price = float(resistances[0]["price"])
+        first_dist = (first_price - close) / max(close, 0.01) * 100
+        if first_dist < 4.0:
+            failed_pivots.append(resistances[0])
+            resistances = resistances[1:]
 
     support = supports[0]["price"] if supports else float(recent["Low"].tail(30).min())
     deep_support_candidates = [c for c in supports if c["price"] < support * 0.985]
@@ -1089,6 +1109,15 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             if target_2 < target_1:
                 target_1, target_2 = target_2, target_1
 
+            # Guardrail for long trades: Target 1 must be meaningfully ABOVE current price.
+            # If a minor pivot/support slipped into Target 1, replace it with the next resistance / RR target.
+            min_valid_t1 = close * 1.035
+            if target_1 < min_valid_t1:
+                old_target_1 = target_1
+                target_1 = max(resistance_2 if resistance_2 > min_valid_t1 else 0, rr_target_1, min_valid_t1)
+                target_2 = max(target_2, target_1 * 1.04, rr_target_2)
+                reasons.append(f"Target 1 {old_target_1:.2f} quá gần/thấp so với giá hiện tại; dùng kháng cự chính phía trên làm target")
+
             reward = target_2 - close
             risk_reward = reward / risk if risk > 0 else 0
 
@@ -1759,6 +1788,8 @@ Important rules:
 - If price is near Support 1 and chart confirms support hold / green reversal / higher low, you may upgrade to WATCH TO ENTER or PULLBACK WATCH.
 - If price is near support but the chart shows a red candle/falling knife/no confirmation, prefer WAIT or NO TRADE.
 - If a minor resistance was broken intraday but price closed back below it, treat it as a failed intraday pivot, not the main resistance. Use the next stronger resistance above as Resistance 1 / Target 1.
+- For LONG/BUY analysis, Target 1 must be above current price and should be the main resistance from the uploaded chart, not a support, not an intraday high, and not a tiny pivot that price already pierced intraday.
+- If app data gives a Target 1 that is below current price or too close to current price, correct it using the uploaded chart's next clear resistance.
 - If price is in the middle of Support 1 and Resistance 1, prefer WAIT / NO SETUP unless there is a very strong catalyst.
 - If price is close to Resistance 1, do not chase; prefer WAIT unless price clearly breaks out with volume.
 - If app data is bullish but chart shows rejection at resistance, prefer WAIT.
@@ -2011,8 +2042,8 @@ def build_share_text(result, app_data=None):
 st.markdown(
     """
     <div class="hero">
-        <h1>📈 Stock App Pro V25.1</h1>
-        <p>V25.1 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
+        <h1>📈 Stock App Pro V25.2</h1>
+        <p>V25.2 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
