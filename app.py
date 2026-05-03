@@ -267,7 +267,7 @@ def find_chart_trade_levels(data, lookback=180):
         "resistance": float(resistance),
         "resistance_2": float(resistance_2),
         "failed_intraday_pivot": float(failed_pivot) if failed_pivot else None,
-        "method": "pivot_cluster_v25_main_resistance_filters_failed_intraday_pivots",
+        "method": "standard_zone_formula_v26_support_resistance_entry",
     }
 
 
@@ -1003,7 +1003,7 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             reasons.append("SEC filing risk medium")
 
         # -------------------------------
-        # Entry Zones - Manual Chart Style Logic
+        # Entry Zones - STANDARD ZONE FORMULA v26 - Manual Chart Style Logic
         # -------------------------------
         # Mô phỏng cách vẽ chart của người dùng:
         # 1) Resistance gần nhất phía trên = vùng chốt lời / breakout line
@@ -1111,7 +1111,7 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
 
             # Guardrail for long trades: Target 1 must be meaningfully ABOVE current price.
             # If a minor pivot/support slipped into Target 1, replace it with the next resistance / RR target.
-            min_valid_t1 = close * 1.035
+            min_valid_t1 = close * 1.035  # Target 1 for LONG must be above current price by a meaningful margin
             if target_1 < min_valid_t1:
                 old_target_1 = target_1
                 target_1 = max(resistance_2 if resistance_2 > min_valid_t1 else 0, rr_target_1, min_valid_t1)
@@ -2042,8 +2042,8 @@ def build_share_text(result, app_data=None):
 st.markdown(
     """
     <div class="hero">
-        <h1>📈 Stock App Pro V25.2</h1>
-        <p>V25.2 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
+        <h1>📈 Stock App Pro V26</h1>
+        <p>V26 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
