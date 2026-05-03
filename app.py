@@ -840,11 +840,12 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         resistance_2 = chart_levels.get("resistance_2", max(resistance * 1.06, close * 1.12))
         failed_intraday_pivot = chart_levels.get("failed_intraday_pivot")
         swing_support = support_deep
-        if failed_intraday_pivot:
-            reasons.append(f"Pivot nhỏ {failed_intraday_pivot:.2f} đã bị phá trong phiên nhưng chưa giữ được khi đóng cửa; dùng resistance chính phía trên")
 
         score = 0
         reasons = []
+        if failed_intraday_pivot:
+            reasons.append(f"Pivot nhỏ {failed_intraday_pivot:.2f} đã bị phá trong phiên nhưng chưa giữ được khi đóng cửa; dùng resistance chính phía trên")
+
         chart_data = chart_confirmations.get(ticker.upper(), {})
         chart_confirmation = chart_data.get("confirmation", "Neutral")
         chart_note = chart_data.get("note", "")
@@ -2010,8 +2011,8 @@ def build_share_text(result, app_data=None):
 st.markdown(
     """
     <div class="hero">
-        <h1>📈 Stock App Pro V21</h1>
-        <p>V23 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
+        <h1>📈 Stock App Pro V25.1</h1>
+        <p>V25.1 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
