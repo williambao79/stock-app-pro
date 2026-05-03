@@ -1767,7 +1767,7 @@ def render_ai_result(result):
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="section-title compact-section">Kế hoạch hành động AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title compact-section">Kế hoạch hành động</div>', unsafe_allow_html=True)
 
     left_html = (
         '<div class="panel-card ai-card-accent-blue">'
@@ -1871,8 +1871,8 @@ def build_share_text(result, app_data=None):
 st.markdown(
     """
     <div class="hero">
-        <h1>📈 Stock App Pro</h1>
-        <p>3 tầng phân tích: App Data + Multi-Source News/Catalyst + Chart Analysis.</p>
+        <h1>📈 Stock App Pro V21</h1>
+        <p>V20 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1899,7 +1899,7 @@ if "openai_api_key" not in st.session_state:
     st.session_state.openai_api_key = ""
 
 tab_quick, tab_watchlist, tab_ai, tab_guide = st.tabs([
-    "⚡ Quick Analyze", "📋 Watchlist", "📊 Final Analysis", "📱 iPhone Guide"
+    "⚡ Quick Analyze", "📋 Watchlist", "📊 FINAL ANALYSIS", "📱 iPhone Guide"
 ])
 
 with tab_quick:
@@ -1987,7 +1987,7 @@ with tab_watchlist:
                 st.error(f"Lỗi: {e}")
 
 with tab_ai:
-    st.markdown('<div class="section-title">Final Analysis - 2 tầng</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">FINAL ANALYSIS - 2 tầng</div>', unsafe_allow_html=True)
     st.caption("Tầng 1: app tự lấy dữ liệu và tính toán. Tầng 2: phân tích chart upload + dữ liệu app để đưa quyết định cuối cùng.")
 
     try:
@@ -2054,8 +2054,6 @@ with tab_ai:
             "News Risk": app_data.get("News Risk"),
         }
         st.dataframe(pd.DataFrame([preview_items]), use_container_width=True, hide_index=True)
-        with st.expander("Xem toàn bộ dữ liệu app dùng cho Final Analysis"):
-            st.json(app_data)
 
     if run_ai_layer:
         api_key = get_openai_api_key()
