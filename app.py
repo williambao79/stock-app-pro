@@ -130,16 +130,110 @@ def calculate_atr(data, period=14):
     return true_range.ewm(alpha=1 / period, adjust=False).mean()
 
 
-def find_support_resistance(data, lookback=30):
-    recent = data.tail(lookback)
-    support = float(recent["Low"].min())
-    resistance = float(recent["High"].max())
-    return support, resistance
+def _cluster_price_levels(levels, tolerance_pct=1.2):
+    """Cluster nearby pivot prices into support/resistance zones.
+    Returns levels sorted by strength. Each level has price, touches, last_idx.
+    """
+    if not levels:
+        return []
+    levels = sorted(levels, key=lambda x: x["price"])
+    clusters = []
+    for lv in levels:
+        placed = False
+        for c in clusters:
+            mid = c["price"]
+            if mid > 0 and abs(lv["price"] - mid) / mid * 100 <= tolerance_pct:
+                total = c["touches"] + 1
+                c["price"] = (c["price"] * c["touches"] + lv["price"]) / total
+                c["touches"] = total
+                c["last_idx"] = max(c["last_idx"], lv["idx"])
+                c["volume_score"] += lv.get("volume_score", 0)
+                placed = True
+                break
+        if not placed:
+            clusters.append({"price": lv["price"], "touches": 1, "last_idx": lv["idx"], "volume_score": lv.get("volume_score", 0)})
+    return clusters
 
 
-def find_recent_swing_support(data, lookback=15):
-    recent = data.tail(lookback)
-    return float(recent["Low"].min())
+def find_chart_trade_levels(data, lookback=180):
+    """Find levels like a trader drawing horizontal lines on TradingView.
+    Logic:
+    - detect swing highs/lows over recent daily candles
+    - cluster close levels into zones
+    - choose nearest strong resistance above current price
+    - choose nearest support below current price and one deeper support
+    This mimics manual chart lines such as resistance 22.79, support 19.76, deep support 18.81.
+    """
+    recent = data.tail(min(lookback, len(data))).copy().reset_index(drop=True)
+    if recent.empty or len(recent) < 20:
+        close = float(data["Close"].iloc[-1])
+        return {"support": close * 0.95, "deep_support": close * 0.90, "resistance": close * 1.08, "method": "fallback"}
+
+    close = float(recent["Close"].iloc[-1])
+    avg_vol = float(recent["Volume"].tail(20).mean()) if "Volume" in recent else 0
+    swing_lows, swing_highs = [], []
+    window = 2
+    for i in range(window, len(recent) - window):
+        low = float(recent.loc[i, "Low"])
+        high = float(recent.loc[i, "High"])
+        vol = float(recent.loc[i, "Volume"]) if "Volume" in recent else 0
+        vol_score = 1 if avg_vol > 0 and vol > avg_vol else 0
+        if low <= float(recent.loc[i-window:i+window, "Low"].min()):
+            swing_lows.append({"price": low, "idx": i, "volume_score": vol_score})
+        if high >= float(recent.loc[i-window:i+window, "High"].max()):
+            swing_highs.append({"price": high, "idx": i, "volume_score": vol_score})
+
+    # Include important recent highs/lows so fresh breakout/pullback zones are not missed.
+    for i in range(max(0, len(recent)-25), len(recent)):
+        swing_lows.append({"price": float(recent.loc[i, "Low"]), "idx": i, "volume_score": 0})
+        swing_highs.append({"price": float(recent.loc[i, "High"]), "idx": i, "volume_score": 0})
+
+    support_clusters = _cluster_price_levels(swing_lows, tolerance_pct=1.35)
+    resistance_clusters = _cluster_price_levels(swing_highs, tolerance_pct=1.35)
+
+    def strength(c):
+        recency = c["last_idx"] / max(1, len(recent)-1)
+        return c["touches"] * 2.0 + c.get("volume_score", 0) * 0.5 + recency
+
+    supports = [c for c in support_clusters if c["price"] < close * 0.995]
+    resistances = [c for c in resistance_clusters if c["price"] > close * 1.005]
+
+    # Prefer nearby strong zones, not the absolute min/max.
+    supports.sort(key=lambda c: (abs(close - c["price"]) / close * 100 - strength(c) * 0.15))
+    resistances.sort(key=lambda c: (abs(c["price"] - close) / close * 100 - strength(c) * 0.15))
+
+    support = supports[0]["price"] if supports else float(recent["Low"].tail(30).min())
+    deep_support_candidates = [c for c in supports if c["price"] < support * 0.985]
+    deep_support_candidates.sort(key=lambda c: (abs(support - c["price"]) / support * 100 - strength(c) * 0.10))
+    deep_support = deep_support_candidates[0]["price"] if deep_support_candidates else min(support * 0.955, float(recent["Low"].tail(60).min()))
+    resistance = resistances[0]["price"] if resistances else float(recent["High"].tail(60).max())
+
+    # Resistance 2 = stronger / higher resistance above Resistance 1.
+    resistance_2_candidates = [c for c in resistances if c["price"] > resistance * 1.015]
+    resistance_2_candidates.sort(key=lambda c: (abs(c["price"] - resistance) / max(resistance, 0.01) * 100 - strength(c) * 0.10))
+    if resistance_2_candidates:
+        resistance_2 = resistance_2_candidates[0]["price"]
+    else:
+        # Fallback: measured move above Resistance 1, similar to manual target zone when no clear line exists.
+        resistance_2 = max(resistance * 1.06, close * 1.12)
+
+    # Round later in display; keep raw for calculations.
+    return {
+        "support": float(support),
+        "deep_support": float(deep_support),
+        "resistance": float(resistance),
+        "resistance_2": float(resistance_2),
+        "method": "pivot_cluster_v24_manual_chart_style",
+    }
+
+
+def find_support_resistance(data, lookback=180):
+    levels = find_chart_trade_levels(data, lookback=lookback)
+    return levels["support"], levels["resistance"]
+
+
+def find_recent_swing_support(data, lookback=60):
+    return find_chart_trade_levels(data, lookback=max(60, lookback))["deep_support"]
 
 
 def analyze_single_market_index(ticker):
@@ -715,8 +809,12 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         avg_volume = float(latest["AVG_VOLUME_20"])
         atr = float(latest["ATR"])
 
-        support, resistance = find_support_resistance(data, lookback=30)
-        swing_support = find_recent_swing_support(data, lookback=15)
+        chart_levels = find_chart_trade_levels(data, lookback=180)
+        support = chart_levels["support"]
+        support_deep = chart_levels["deep_support"]
+        resistance = chart_levels["resistance"]
+        resistance_2 = chart_levels.get("resistance_2", max(resistance * 1.06, close * 1.12))
+        swing_support = support_deep
 
         score = 0
         reasons = []
@@ -857,56 +955,58 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             reasons.append("SEC filing risk medium")
 
         # -------------------------------
-        # Entry Zones - Support Based Universal Logic
+        # Entry Zones - Manual Chart Style Logic
         # -------------------------------
-        # Entry Zone = vùng gần support hợp lý để canh vào
-        # Deep Safe Entry = vùng thấp hơn support một chút
-        # Nếu support quá xa giá hiện tại, không kéo entry xuống quá sâu
+        # Mô phỏng cách vẽ chart của người dùng:
+        # 1) Resistance gần nhất phía trên = vùng chốt lời / breakout line
+        # 2) Support gần nhất phía dưới = vùng pullback entry đẹp
+        # 3) Deep support = vùng an toàn hơn nếu giá điều chỉnh sâu
+        # Không mua giữa vùng nếu giá không gần support và chưa breakout.
 
         support_distance_pct = ((close - support) / close) * 100 if close > 0 else 999
+        resistance_distance_pct = ((resistance - close) / close) * 100 if close > 0 else 999
+        range_position_pct = ((close - support) / max(resistance - support, 0.01)) * 100 if resistance > support else 50
+        range_position_pct = max(0, min(100, range_position_pct))
+
+        # Entry chính quanh support gần: ví dụ support 19.76 thì entry khoảng 19.55 - 20.05
+        aggressive_entry_low = support * 0.99
+        aggressive_entry_high = support * 1.015
+
+        # Deep Safe Entry quanh support sâu hơn: ví dụ deep support 18.81 thì khoảng 18.62 - 19.00
+        safe_entry_low = support_deep * 0.99
+        safe_entry_high = support_deep * 1.01
 
         if support_distance_pct <= 3:
-            # Giá đang rất gần support
-            aggressive_entry_low = support * 1.00
-            aggressive_entry_high = support * 1.03
-            safe_entry_low = support * 0.97
-            safe_entry_high = support * 1.00
-
+            entry_quality = "Near Support - Best Watch"
+            reasons.append("Giá đang gần support, có thể canh nến xác nhận để vào")
         elif support_distance_pct <= 7:
-            # Support gần, vùng vào đẹp quanh support
-            aggressive_entry_low = support * 1.01
-            aggressive_entry_high = support * 1.05
-            safe_entry_low = support * 0.97
-            safe_entry_high = support * 1.01
-
+            entry_quality = "Good Pullback Entry"
+            reasons.append("Entry Zone nằm quanh support gần, risk/reward hợp lý nếu có nến xác nhận")
         elif support_distance_pct <= 12:
-            # Support hơi xa, vẫn dùng support nhưng nới vùng cao hơn
-            aggressive_entry_low = support * 1.03
-            aggressive_entry_high = support * 1.08
-            safe_entry_low = support * 0.98
-            safe_entry_high = support * 1.03
-
+            entry_quality = "Wait Pullback"
+            reasons.append("Giá đang cao hơn support, nên chờ pullback thay vì mua đuổi")
         else:
-            # Support quá xa giá hiện tại: không gọi là entry đẹp ngay
-            # Chỉ đưa vùng pullback hợp lý gần giá hơn để theo dõi
-            aggressive_entry_low = close * 0.94
-            aggressive_entry_high = close * 0.98
-            safe_entry_low = close * 0.88
-            safe_entry_high = close * 0.93
-            reasons.append("Support chính quá xa, chỉ nên chờ pullback gần hơn hoặc breakout xác nhận")
+            entry_quality = "Entry Too Far"
+            reasons.append("Giá cách support khá xa, mua ngay sẽ rủi ro hơn")
 
-        # Nếu đang gần resistance thì hạ Entry Zone xuống để tránh mua đuổi
-        if setup == "Near Resistance":
-            aggressive_entry_low = min(aggressive_entry_low, close * 0.92)
-            aggressive_entry_high = min(aggressive_entry_high, close * 0.96)
-            safe_entry_low = min(safe_entry_low, close * 0.86)
-            safe_entry_high = min(safe_entry_high, close * 0.91)
-            reasons.append("Gần resistance, Entry Zone được hạ xuống để tránh mua đuổi")
 
-        # Bảo đảm Deep Safe Entry luôn thấp hơn Entry Zone
-        if safe_entry_high >= aggressive_entry_low:
-            safe_entry_high = aggressive_entry_low * 0.985
-            safe_entry_low = safe_entry_high * 0.96
+        # Manual chart rule: avoid buying middle zone unless breakout is confirmed.
+        # 0-35% of range = near support; 35-70% = middle zone; 70%+ = near resistance.
+        if 35 < range_position_pct < 70 and resistance_distance_pct > 3:
+            reasons.append("Giá đang ở giữa vùng support/resistance, không phải điểm mua đẹp")
+            if final_decision not in ["NO TRADE - SEC Filing Risk", "NO TRADE - Earnings Risk"]:
+                final_decision = "WAIT / NO SETUP"
+        elif range_position_pct >= 70:
+            reasons.append("Giá đang ở nửa trên của range, cần tránh mua đuổi gần resistance")
+
+        # Nếu giá đang sát resistance, không nâng entry lên theo giá hiện tại.
+        if resistance_distance_pct <= 4:
+            setup = "Near Resistance"
+            score -= 2
+            reasons.append("Giá gần resistance, ưu tiên chờ pullback hoặc breakout rõ ràng")
+
+        # Breakout entry chỉ dùng khi đóng cửa vượt resistance với volume mạnh.
+        breakout_entry = resistance * 1.005
 
         # Bảo vệ lỗi dữ liệu
         aggressive_entry_low = max(aggressive_entry_low, 0)
@@ -928,8 +1028,8 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         else:
             entry_quality = "Entry Too Far"
 
-        aggressive_stop = min(aggressive_entry_low * 0.96, ema21 * 0.97)
-        safe_stop = support * 0.96
+        aggressive_stop = min(aggressive_entry_low * 0.965, support * 0.965, ema21 * 0.97)
+        safe_stop = support_deep * 0.965
 
         if trend in ["Strong Uptrend", "Uptrend", "Neutral Up"]:
             stop_loss = aggressive_stop
@@ -948,14 +1048,15 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             rr_target_1 = close + risk * 1.5
             rr_target_2 = close + risk * 2.5
 
-            # Target 1 phải là mục tiêu gần hơn; Target 2 là mục tiêu xa hơn.
-            # Nếu resistance gần hơn target theo R/R, lấy resistance làm Target 1.
+            # Manual chart style target logic:
+            # Target 1 = Resistance 1 / nearest resistance.
+            # Target 2 = Resistance 2 / stronger resistance, or measured R/R target if higher.
             if resistance > close:
-                target_1 = min(resistance, rr_target_1)
-                target_2 = max(resistance, rr_target_1)
+                target_1 = resistance
+                target_2 = max(resistance_2, rr_target_1)
             else:
                 target_1 = rr_target_1
-                target_2 = rr_target_2
+                target_2 = max(rr_target_2, resistance_2)
 
             if target_2 < target_1:
                 target_1, target_2 = target_2, target_1
@@ -1195,7 +1296,11 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             "Momentum": momentum,
             "Volume Status": volume_status,
             "Support": round(support, 2),
+            "Deep Support": round(support_deep, 2),
             "Resistance": round(resistance, 2),
+            "Resistance 2": round(resistance_2, 2),
+            "Breakout Entry": round(breakout_entry, 2),
+            "Range Position %": round(range_position_pct, 2),
             "Entry Zone": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
             "Deep Safe Entry": f"{round(safe_entry_low, 2)} - {round(safe_entry_high, 2)}",
             "Aggressive Entry": f"{round(early_entry_low, 2)} - {round(early_entry_high, 2)}",
@@ -1230,7 +1335,7 @@ def save_to_excel(df):
         "Market Condition", "Market Filter",
         "Trend", "Setup", "Action",
         "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
-        "Support", "Resistance",
+        "Support", "Deep Support", "Resistance", "Resistance 2", "Range Position %",
         "Entry Zone", "Deep Safe Entry",
         "Aggressive Entry", "Entry Distance %",
         "Entry Quality",
@@ -1301,7 +1406,7 @@ APP_COLUMNS = [
     "Market Condition", "Market Filter",
     "Trend", "Setup", "Action",
     "RSI", "Day Change %", "RSI Status", "Momentum", "Volume Status",
-    "Support", "Resistance",
+    "Support", "Deep Support", "Resistance", "Resistance 2", "Range Position %",
     "Entry Zone", "Deep Safe Entry", "Aggressive Entry", "Entry Distance %",
     "Entry Quality", "Aggressive Stop", "Safe Stop", "Stop Loss",
     "Target 1", "Target 2", "Risk/Reward",
@@ -1312,8 +1417,8 @@ APP_COLUMNS = [
 ]
 
 PREVIEW_COLUMNS = [
-    "Ticker", "Price", "Score", "Final Decision", "Entry Zone",
-    "Deep Safe Entry", "Aggressive Entry", "Stop Loss", "Target 1", "Target 2", "Risk/Reward"
+    "Ticker", "Price", "Score", "Final Decision", "Support", "Resistance",
+    "Entry Zone", "Deep Safe Entry", "Breakout Entry", "Stop Loss", "Target 1", "Target 2", "Risk/Reward"
 ]
 
 st.markdown(
@@ -1564,7 +1669,7 @@ def compact_app_data(row, market_notes=""):
         "Ticker", "Price", "Score", "Signal", "Final Decision",
         "Earnings Status", "Earnings Date", "Market Condition", "Market Filter",
         "Trend", "Setup", "Action", "RSI", "Day Change %", "RSI Status",
-        "Momentum", "Volume Status", "Support", "Resistance", "Entry Zone",
+        "Momentum", "Volume Status", "Support", "Deep Support", "Resistance", "Resistance 2", "Breakout Entry", "Range Position %", "Entry Zone",
         "Deep Safe Entry", "Aggressive Entry", "Entry Distance %", "Entry Quality",
         "Aggressive Stop", "Safe Stop", "Stop Loss", "Target 1", "Target 2",
         "Risk/Reward", "Chart Confirmation", "Chart Adjustment", "Chart Note",
@@ -1594,7 +1699,7 @@ AI_FINAL_SCHEMA = {
     "key_points": ["Điểm chính 1 bằng tiếng Việt", "Điểm chính 2 bằng tiếng Việt", "Điểm chính 3 bằng tiếng Việt"],
     "risk_warnings": ["Cảnh báo rủi ro 1 bằng tiếng Việt", "Cảnh báo rủi ro 2 bằng tiếng Việt"],
     "action_plan": ["Bước hành động 1 bằng tiếng Việt", "Bước hành động 2 bằng tiếng Việt", "Bước hành động 3 bằng tiếng Việt"],
-    "final_entry_zone": "price zone. If decision is WAIT, still provide Reference Entry Zone from app data and label it Reference only",
+    "final_entry_zone": "price zone. If decision is WAIT or NO TRADE, still provide Reference Entry Zone / Stop / Target from app data and label them Reference only",
     "final_stop_loss": "price. If decision is WAIT, still provide Reference Stop from app data and label it Reference only",
     "final_target_1": "price. If decision is WAIT, still provide Reference Target 1 from app data and label it Reference only",
     "final_target_2": "price. If decision is WAIT, still provide Reference Target 2 from app data and label it Reference only",
@@ -1613,18 +1718,21 @@ The app has already collected real data and calculated technical/risk levels.
 Your job is NOT to replace the app calculations. Your job is to:
 1) read the uploaded chart image,
 2) compare the chart to the app data,
-3) evaluate whether the app's Entry Zone / Stop / Targets make sense,
+3) evaluate whether the app's chart-style levels make sense: Support, Deep Support, Resistance, Resistance 2, Entry Zone, Deep Safe Entry, Breakout Entry, Stop and Targets,
 4) incorporate app-collected news, SEC, earnings, market condition, ETF filter, and falling-knife risk,
-5) produce one practical final decision.
+5) produce one practical final decision using this rule: prefer pullback entries near support, avoid buying in the middle zone, avoid chasing near resistance, and only accept breakout entries when chart/volume confirm.
 
 Important rules:
 - Use only the app data, chart image, and user context provided.
 - Do not invent fresh news or unseen fundamentals.
 - If chart quality is poor, lower confidence.
 - If app data says earnings or SEC risk is high, be conservative.
+- If price is near Support 1 and chart confirms support hold / green reversal / higher low, you may upgrade to WATCH TO ENTER or PULLBACK WATCH.
 - If price is near support but the chart shows a red candle/falling knife/no confirmation, prefer WAIT or NO TRADE.
+- If price is in the middle of Support 1 and Resistance 1, prefer WAIT / NO SETUP unless there is a very strong catalyst.
+- If price is close to Resistance 1, do not chase; prefer WAIT unless price clearly breaks out with volume.
 - If app data is bullish but chart shows rejection at resistance, prefer WAIT.
-- If chart confirms support hold, higher low, breakout, or pullback holding, you may upgrade to WATCH TO ENTER.
+- If chart confirms breakout above Resistance 1 with strong volume, you may upgrade to BREAKOUT WATCH.
 - Always give a practical action plan.
 - Write ALL user-facing text in Vietnamese for these fields: main_reason, key_points, risk_warnings, action_plan, invalid_if, summary_vi.
 - Keep only technical labels such as Entry Zone, Stop Loss, Target 1, Target 2 in English if needed.
@@ -1874,7 +1982,7 @@ st.markdown(
     """
     <div class="hero">
         <h1>📈 Stock App Pro V21</h1>
-        <p>V20 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
+        <p>V23 đồng bộ PC: App Data + Multi-Source News/Catalyst + Final Analysis.</p>
     </div>
     """,
     unsafe_allow_html=True,
