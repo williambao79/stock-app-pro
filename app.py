@@ -248,6 +248,14 @@ def find_chart_trade_levels(data, lookback=180):
     deep_support_candidates = [c for c in supports if c["price"] < support * 0.985]
     deep_support_candidates.sort(key=lambda c: (abs(support - c["price"]) / support * 100 - strength(c) * 0.10))
     deep_support = deep_support_candidates[0]["price"] if deep_support_candidates else min(support * 0.955, float(recent["Low"].tail(60).min()))
+
+    # Third support helps separate Aggressive / Safe / Deep Safe entries.
+    # If Support 1 is only a very near pivot under current price, Safe Entry should use the next meaningful support,
+    # and Deep Safe Entry should use one more zone below that.
+    third_support_candidates = [c for c in supports if c["price"] < deep_support * 0.985]
+    third_support_candidates.sort(key=lambda c: (abs(deep_support - c["price"]) / max(deep_support, 0.01) * 100 - strength(c) * 0.10))
+    third_support = third_support_candidates[0]["price"] if third_support_candidates else min(deep_support * 0.955, float(recent["Low"].tail(90).min()))
+
     resistance = resistances[0]["price"] if resistances else float(recent["High"].tail(60).max())
     failed_pivot = failed_pivots[0]["price"] if failed_pivots else None
 
@@ -264,6 +272,7 @@ def find_chart_trade_levels(data, lookback=180):
     return {
         "support": float(support),
         "deep_support": float(deep_support),
+        "third_support": float(third_support),
         "resistance": float(resistance),
         "resistance_2": float(resistance_2),
         "failed_intraday_pivot": float(failed_pivot) if failed_pivot else None,
@@ -856,6 +865,7 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
         chart_levels = find_chart_trade_levels(data, lookback=180)
         support = chart_levels["support"]
         support_deep = chart_levels["deep_support"]
+        support_third = chart_levels.get("third_support", min(support_deep * 0.955, support * 0.90))
         resistance = chart_levels["resistance"]
         resistance_2 = chart_levels.get("resistance_2", max(resistance * 1.06, close * 1.12))
         failed_intraday_pivot = chart_levels.get("failed_intraday_pivot")
@@ -1316,23 +1326,36 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             score = max(score, 3) if final_decision in ["BREAKOUT WATCH", "REVERSAL WATCH"] else score
 
 
-        # Entry categories chuẩn v29:
-        # Aggressive Entry = pullback sớm gần giá hiện tại, nhưng LUÔN nằm dưới current price.
-        # Safe Entry = vùng quanh Support 1 do App Data tìm ra.
-        # Deep Safe Entry = vùng quanh Deep Support.
+        # Entry categories chuẩn v30:
+        # Aggressive Entry = vùng pullback sớm gần giá hiện tại / pivot rất gần.
+        # Safe Entry = vùng quanh Support 1 THẬT SỰ, không trùng với aggressive pivot nếu support quá gần giá hiện tại.
+        # Deep Safe Entry = một vùng support sâu hơn nữa.
         # Breakout Entry = chỉ dùng khi đóng cửa vượt Resistance 1 với volume mạnh.
-        if close > aggressive_entry_high:
-            early_entry_low = close * 0.972
-            early_entry_high = close * 0.996
-        elif aggressive_entry_low <= close <= aggressive_entry_high:
-            early_entry_low = max(aggressive_entry_low, close * 0.985)
-            early_entry_high = min(aggressive_entry_high, close * 0.996)
+        near_minor_support = support_distance_pct <= 3.0
+        if near_minor_support:
+            # Ví dụ ONDS: support/pivot rất gần quanh 10.13 chỉ là aggressive pullback.
+            # Safe Entry phải dùng support kế tiếp sâu hơn; Deep Safe dùng vùng sâu hơn nữa.
+            display_aggressive_low = support * 0.99
+            display_aggressive_high = min(support * 1.015, close * 0.996)
+            display_safe_low = support_deep * 0.99
+            display_safe_high = support_deep * 1.015
+            display_deep_low = support_third * 0.99
+            display_deep_high = support_third * 1.015
         else:
-            early_entry_low = aggressive_entry_low
-            early_entry_high = min(aggressive_entry_high, close * 0.996)
+            # Khi support chính không quá sát giá hiện tại, vẫn hiển thị aggressive như pullback sớm gần current price.
+            display_aggressive_low = max(close * 0.972, min(support * 1.02, close * 0.94))
+            display_aggressive_high = close * 0.996
+            display_safe_low = support * 0.99
+            display_safe_high = support * 1.015
+            display_deep_low = support_deep * 0.99
+            display_deep_high = support_deep * 1.015
 
-        early_entry_low = max(early_entry_low, 0)
-        early_entry_high = max(early_entry_high, early_entry_low)
+        display_aggressive_low = max(display_aggressive_low, 0)
+        display_aggressive_high = max(display_aggressive_high, display_aggressive_low)
+        display_safe_low = max(display_safe_low, 0)
+        display_safe_high = max(display_safe_high, display_safe_low)
+        display_deep_low = max(display_deep_low, 0)
+        display_deep_high = max(display_deep_high, display_deep_low)
 
         return {
             "Ticker": ticker,
@@ -1354,16 +1377,17 @@ def analyze_stock(ticker, market_condition="Neutral", chart_confirmations=None):
             "Volume Status": volume_status,
             "Support": round(support, 2),
             "Deep Support": round(support_deep, 2),
+            "Third Support": round(support_third, 2),
             "Resistance": round(resistance, 2),
             "Resistance 2": round(resistance_2, 2),
             "Failed Intraday Pivot": round(failed_intraday_pivot, 2) if failed_intraday_pivot else "",
             "Breakout Entry": round(breakout_entry, 2),
             "Range Position %": round(range_position_pct, 2),
             # Backward compatible: Entry Zone = Safe Entry quanh Support 1
-            "Entry Zone": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
-            "Safe Entry": f"{round(aggressive_entry_low, 2)} - {round(aggressive_entry_high, 2)}",
-            "Deep Safe Entry": f"{round(safe_entry_low, 2)} - {round(safe_entry_high, 2)}",
-            "Aggressive Entry": f"{round(early_entry_low, 2)} - {round(early_entry_high, 2)}",
+            "Entry Zone": f"{round(display_safe_low, 2)} - {round(display_safe_high, 2)}",
+            "Safe Entry": f"{round(display_safe_low, 2)} - {round(display_safe_high, 2)}",
+            "Deep Safe Entry": f"{round(display_deep_low, 2)} - {round(display_deep_high, 2)}",
+            "Aggressive Entry": f"{round(display_aggressive_low, 2)} - {round(display_aggressive_high, 2)}",
             "Entry Distance %": round(entry_distance_pct, 2),
             "Entry Quality": entry_quality,
             "Aggressive Stop": round(aggressive_stop, 2),
